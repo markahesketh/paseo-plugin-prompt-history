@@ -18,8 +18,6 @@ type PromptHistoryKeyEvent = {
 
 type PromptHistoryElement = {
   click(): void;
-  focus(): void;
-  select?(): void;
   closest?(selector: string): PromptHistoryElement | null;
   getClientRects?(): { length: number };
 };
@@ -40,7 +38,6 @@ declare const window: {
     listener: (event: PromptHistoryKeyEvent) => void,
     capture: boolean,
   ): void;
-  requestAnimationFrame(callback: () => void): number;
 };
 
 declare const document: {
@@ -56,27 +53,8 @@ function onlyElement(selector: string): PromptHistoryElement | null {
   return chooseVisibleElement(Array.from(elements));
 }
 
-function focusSearchInput(): boolean {
-  const input = onlyElement(searchSelector);
-  if (!input) {
-    return false;
-  }
-
-  input.focus();
-  input.select?.();
-  return true;
-}
-
-function focusSearchInputWhenReady(attempt = 0): void {
-  if (focusSearchInput() || attempt >= 5) {
-    return;
-  }
-
-  window.requestAnimationFrame(() => focusSearchInputWhenReady(attempt + 1));
-}
-
 function openPromptHistory(): void {
-  if (focusSearchInput()) {
+  if (onlyElement(searchSelector)) {
     return;
   }
 
@@ -86,7 +64,6 @@ function openPromptHistory(): void {
   }
 
   button.click();
-  focusSearchInputWhenReady();
 }
 
 export function installPromptHistoryHotkey(): () => void {

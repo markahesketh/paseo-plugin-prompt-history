@@ -19,6 +19,7 @@ import { getQueuedPrompts, sendPrompt, subscribePromptQueue } from "./send";
 const PAGE_SIZE = 100;
 const MAX_PAGES_PER_AGENT = 20;
 const MAX_CONCURRENT_AGENT_LOADS = 4;
+const HOST_FOCUS_SETTLE_DELAY_MS = 200;
 
 type Paseo = ReturnType<typeof usePaseo>;
 type Timeline = ReturnType<Paseo["agents"]["ref"]>["timeline"];
@@ -290,6 +291,22 @@ function PromptHistoryContent({
       }
     });
   }, [agentId]);
+
+  useEffect(() => {
+    let active = true;
+    const focusSearch = () => {
+      if (active) {
+        searchRef.current?.focus();
+      }
+    };
+
+    focusSearch();
+    const timer = setTimeout(focusSearch, HOST_FOCUS_SETTLE_DELAY_MS);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     setSelectedIndex(0);
