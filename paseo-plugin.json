@@ -2,6 +2,6 @@
   "id": "prompt-history",
   "description": "Search and reuse prompts from agent history",
   "requirements": {
-    "paseo": ">=0.9.1 <0.10.0"
+    "paseo": ">=0.9.1 <0.11.0"
   }
 }

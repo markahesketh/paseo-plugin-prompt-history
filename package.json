@@ -13,7 +13,7 @@
     "test": "node --experimental-strip-types client/fuzzy.test.ts && node --experimental-strip-types client/history.test.ts && node --experimental-strip-types client/hotkey.test.ts && node --experimental-strip-types client/send.test.ts && node --experimental-strip-types client/web.test.ts"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "0.9.1",
+    "@getpaseo/plugin": "0.10.2",
     "@types/react": "~19.2.0",
     "react": "19.1.0",
     "typescript": "^5.9.3",
