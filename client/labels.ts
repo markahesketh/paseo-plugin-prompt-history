@@ -2,8 +2,10 @@
 export const historyTitle = "Search prompt history";
 export const searchLabel = "Search previous prompts";
 
+/** The title is the pill's accessible name and must not change; only the visible label shows the count. */
 export function pillText(queuedCount: number): { title: string; label: string } {
-  return queuedCount === 0
-    ? { title: historyTitle, label: "History" }
-    : { title: `${historyTitle} (${queuedCount} queued)`, label: `History · ${queuedCount} queued` };
+  return {
+    title: historyTitle,
+    label: queuedCount === 0 ? "History" : `History · ${queuedCount} queued`,
+  };
 }
