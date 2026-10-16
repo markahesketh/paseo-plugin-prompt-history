@@ -10,14 +10,13 @@ type Timeline = ReturnType<Paseo["agents"]["ref"]>["timeline"];
 type TimelineRefetchOptions = NonNullable<Parameters<Timeline["refetch"]>[0]>;
 type TimelineCursor = NonNullable<TimelineRefetchOptions["cursor"]>;
 type AgentDirectoryEntry = Awaited<ReturnType<Paseo["agents"]["list"]>>["entries"][number];
-export type LoadSignal = { cancelled: boolean; abortSignal: AbortSignal };
 
 const promptCache = new Map<string, { updatedAt: string; prompts: PromptRecord[] }>();
 
 async function loadAgentPrompts(
   paseo: Paseo,
   agent: AgentDirectoryEntry["agent"],
-  signal: LoadSignal,
+  signal: AbortSignal,
 ): Promise<PromptRecord[]> {
   const cached = promptCache.get(agent.id);
   if (cached?.updatedAt === agent.updatedAt) {
@@ -30,7 +29,7 @@ async function loadAgentPrompts(
   let complete = true;
 
   for (let pageNumber = 0; pageNumber < MAX_PAGES_PER_AGENT; pageNumber += 1) {
-    if (signal.cancelled) {
+    if (signal.aborted) {
       return [];
     }
 
@@ -59,7 +58,7 @@ async function loadAgentPrompts(
     cursor = page.startCursor;
   }
 
-  if (complete && !signal.cancelled) {
+  if (complete && !signal.aborted) {
     promptCache.set(agent.id, { updatedAt: agent.updatedAt, prompts });
   }
 
@@ -68,14 +67,14 @@ async function loadAgentPrompts(
 
 export async function loadPromptHistory(
   paseo: Paseo,
-  signal: LoadSignal,
+  signal: AbortSignal,
   onBatch: (prompts: PromptRecord[]) => void,
 ): Promise<void> {
   const agents: AgentDirectoryEntry[] = [];
   let cursor: string | undefined;
 
   do {
-    if (signal.cancelled) {
+    if (signal.aborted) {
       return;
     }
 
@@ -83,7 +82,7 @@ export async function loadPromptHistory(
       filter: { includeArchived: true },
       sort: [{ key: "updated_at", direction: "desc" }],
       page: { limit: 200, ...(cursor === undefined ? {} : { cursor }) },
-      signal: signal.abortSignal,
+      signal,
     });
     agents.push(...directory.entries);
 
@@ -92,11 +91,11 @@ export async function loadPromptHistory(
       break;
     }
     cursor = nextCursor;
-  } while (!signal.cancelled);
+  } while (!signal.aborted);
 
   let nextAgent = 0;
   async function loadNextAgent(): Promise<void> {
-    while (!signal.cancelled) {
+    while (!signal.aborted) {
       const entry = agents[nextAgent];
       nextAgent += 1;
       if (!entry) {
@@ -105,11 +104,11 @@ export async function loadPromptHistory(
 
       try {
         const prompts = await loadAgentPrompts(paseo, entry.agent, signal);
-        if (!signal.cancelled && prompts.length > 0) {
+        if (!signal.aborted && prompts.length > 0) {
           onBatch(prompts);
         }
       } catch (error) {
-        if (!signal.cancelled) {
+        if (!signal.aborted) {
           console.warn(`Could not read prompt history for ${entry.agent.id}`, error);
         }
       }
