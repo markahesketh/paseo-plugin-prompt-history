@@ -1,3 +1,5 @@
+import { historyTitle, searchLabel } from "./labels.ts";
+
 export type VisibleElement = {
   getClientRects?(): { length: number };
 };
@@ -9,9 +11,8 @@ export type PromptHistoryElement = VisibleElement & {
 
 export type ElementQuery = (selector: string) => ArrayLike<PromptHistoryElement>;
 
-export const searchSelector = '[aria-label="Search previous prompts"]';
-export const buttonSelector =
-  'button[aria-label="Search prompt history"], button[title="Search prompt history"], [role="button"][aria-label="Search prompt history"]';
+export const searchSelector = `[aria-label="${searchLabel}"]`;
+export const buttonSelector = `button[aria-label="${historyTitle}"], button[title="${historyTitle}"], [role="button"][aria-label="${historyTitle}"]`;
 
 export function chooseVisibleElement<T extends VisibleElement>(elements: readonly T[]): T | null {
   const visible = elements.filter((element) => {

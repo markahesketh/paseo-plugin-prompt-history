@@ -21,6 +21,7 @@ import {
 } from "../shared/queue";
 import { deduplicatePrompts, rankPrompts, type PromptRecord, type RankedPrompt } from "./fuzzy";
 import { promptsFromTimeline } from "./history";
+import { searchLabel } from "./labels";
 import { queueStore } from "./queue";
 import { moveSelection, selectedIndex } from "./selection";
 
@@ -546,7 +547,7 @@ function PromptHistoryContent({
       <TextInput
         ref={searchRef}
         autoFocus
-        accessibilityLabel="Search previous prompts"
+        accessibilityLabel={searchLabel}
         placeholder="Search previous prompts…"
         placeholderTextColor={theme.colors.foregroundMuted}
         value={query}
