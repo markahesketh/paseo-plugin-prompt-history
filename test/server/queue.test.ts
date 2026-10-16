@@ -39,7 +39,6 @@ function fakeDaemon() {
     daemon,
     queue,
     sentTexts: () => daemon.sent.map(({ text }) => text),
-    // The hooks the daemon fires for a prompt it accepted.
     startTurn: (sent: Sent) => queue.turnStarted(sent.agentId, sent.turnId),
     endTurn: (sent: Sent, outcome = completed) =>
       queue.turnEnded(sent.agentId, {
@@ -130,7 +129,6 @@ test("drops a prompt the daemon ran despite a failed send, then continues", asyn
   await endTurn(daemon.sent[0]!);
   const [second] = queue.snapshot().queues[0]!.prompts;
 
-  // The send timed out on our side, but the daemon ran "second" and reports its turn.
   await queue.turnEnded("agent", {
     turnId: "turn-x",
     outcome: completed,
@@ -184,7 +182,6 @@ test("removing the last queued prompt clears the pause", async () => {
 test("a turn started with nothing queued does not block a later send", async () => {
   const { queue, sentTexts } = fakeDaemon();
 
-  // The daemon's turn_ended hook for this turn never arrives.
   await queue.turnStarted("agent", "turn-x");
 
   assert.equal(await queue.send("agent", "later"), "sent");
@@ -226,8 +223,6 @@ test("ignores the late end of a turn the sweep already replaced", async () => {
   await queue.send("agent", "third");
   await startTurn(daemon.sent[0]!);
 
-  // The first turn outlives the grace window and its end hook is slow, so the
-  // sweep sees an idle daemon and sends the second prompt first.
   daemon.time = TURN_START_GRACE_MS;
   await queue.sweep();
   assert.deepEqual(sentTexts(), ["first", "second"]);

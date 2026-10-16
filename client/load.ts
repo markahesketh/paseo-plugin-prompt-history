@@ -26,7 +26,7 @@ async function loadAgentPrompts(
   const timeline = paseo.agents.ref(agent.id).timeline;
   const prompts: PromptRecord[] = [];
   let cursor: TimelineCursor | undefined;
-  let complete = true;
+  let cacheable = true;
 
   for (let pageNumber = 0; pageNumber < MAX_PAGES_PER_AGENT; pageNumber += 1) {
     if (signal.aborted) {
@@ -44,9 +44,8 @@ async function loadAgentPrompts(
       if (pageNumber === 0) {
         throw new Error(page.error);
       }
-      // Keep the newer pages that were read, but read them again next time.
       console.warn(`Could not read older prompt history for ${agent.id}`, page.error);
-      complete = false;
+      cacheable = false;
       break;
     }
 
@@ -58,7 +57,7 @@ async function loadAgentPrompts(
     cursor = page.startCursor;
   }
 
-  if (complete && !signal.aborted) {
+  if (cacheable && !signal.aborted) {
     promptCache.set(agent.id, { updatedAt: agent.updatedAt, prompts });
   }
 

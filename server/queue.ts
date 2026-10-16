@@ -2,7 +2,6 @@ import type { PluginTurnOutcome } from "@getpaseo/plugin/server";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { AgentQueue, QueuedPrompt, QueueSnapshot } from "../shared/queue";
 
-/** "gone" is an agent the daemon has archived or no longer has. */
 export type DaemonStatus = "busy" | "idle" | "gone";
 
 export type TurnEnd = {
@@ -32,7 +31,6 @@ export type PromptQueue = {
   snapshot(): QueueSnapshot;
 };
 
-/** The turn this queue believes is running, from its own send or a turn event. */
 type Turn =
   | { phase: "sent"; messageId: string; since: number }
   | { phase: "running"; turnId: string | null; since: number };
@@ -47,8 +45,6 @@ type AgentState = {
   turn: Turn | null;
 };
 
-// A sent prompt can take a moment to show as running. Until this time passes,
-// the queue trusts its own record of the turn over the daemon's status.
 export const TURN_START_GRACE_MS = 60_000;
 
 function deliveredIds(timeline: readonly AgentTimelineItem[]): Set<string> {
@@ -127,8 +123,6 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
     return result;
   }
 
-  // Our own turn record is trusted for the grace window; after that the daemon
-  // decides, so a missed turn end cannot hold an agent busy forever.
   async function availability(agentId: string, current: AgentState): Promise<DaemonStatus> {
     if (current.turn !== null && deps.now() - current.turn.since < TURN_START_GRACE_MS) {
       return "busy";

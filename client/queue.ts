@@ -17,11 +17,9 @@ export type QueueApi = {
 
 export type QueueStore = {
   get(agentId: string): AgentQueue | null;
-  /** True while a send, remove, or resume for the agent is in flight. */
-  busy(agentId: string): boolean;
+  pending(agentId: string): boolean;
   subscribe(listener: () => void): () => void;
-  /** Resolves undefined without sending when the agent already has a mutation in flight. */
-  send(agentId: string, text: string): Promise<"sent" | "queued" | undefined>;
+  send(agentId: string, text: string): Promise<"sent" | "queued" | "skipped">;
   remove(agentId: string, promptId: string): Promise<void>;
   resume(agentId: string): Promise<void>;
   refresh(): Promise<void>;
@@ -29,12 +27,10 @@ export type QueueStore = {
   dispose(): void;
 };
 
-// Responses can arrive out of order, so only the newest request may replace
-// the snapshot.
 export function createQueueStore(api: QueueApi): QueueStore {
   let queues = new Map<string, AgentQueue>();
   const listeners = new Set<() => void>();
-  const busyAgents = new Set<string>();
+  const pendingAgents = new Set<string>();
   let generation = 0;
   let disposed = false;
   let refreshSoonTimer: ReturnType<typeof setTimeout> | null = null;
@@ -57,16 +53,16 @@ export function createQueueStore(api: QueueApi): QueueStore {
     }
   }
 
-  async function guarded<T>(agentId: string, run: () => Promise<T>): Promise<T | undefined> {
-    if (busyAgents.has(agentId)) {
-      return undefined;
+  async function guarded<T>(agentId: string, run: () => Promise<T>): Promise<T | "skipped"> {
+    if (pendingAgents.has(agentId)) {
+      return "skipped";
     }
-    busyAgents.add(agentId);
+    pendingAgents.add(agentId);
     notify();
     try {
       return await run();
     } finally {
-      busyAgents.delete(agentId);
+      pendingAgents.delete(agentId);
       notify();
     }
   }
@@ -94,7 +90,7 @@ export function createQueueStore(api: QueueApi): QueueStore {
 
   return {
     get: (agentId) => queues.get(agentId) ?? null,
-    busy: (agentId) => busyAgents.has(agentId),
+    pending: (agentId) => pendingAgents.has(agentId),
 
     subscribe(listener) {
       listeners.add(listener);

@@ -84,8 +84,7 @@ export default function contribute(server: PluginServerContext) {
   );
 
   // Hook delivery is best effort with no replay, so a missed turn end must
-  // not leave prompts waiting forever. Sweeps serialise per agent inside the
-  // queue, so one running late cannot double-send.
+  // not leave prompts waiting forever.
   const sweepTimer = setInterval(() => void queue.sweep(), SWEEP_INTERVAL_MS);
 
   return () => {
