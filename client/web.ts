@@ -1,5 +1,5 @@
 import { Platform } from "react-native";
-import { chooseVisibleElement } from "./element";
+import { openPromptHistory, type PromptHistoryElement } from "./element";
 import { isPromptHistoryHotkey } from "./hotkey";
 
 type PromptHistoryKeyEvent = {
@@ -13,18 +13,7 @@ type PromptHistoryKeyEvent = {
   code: string;
   preventDefault(): void;
   stopPropagation(): void;
-  target?: PromptHistoryElement | null;
-};
-
-type PromptHistoryElement = {
-  click(): void;
-  closest?(selector: string): PromptHistoryElement | null;
-  getClientRects?(): { length: number };
-};
-
-type PromptHistoryElementList = {
-  length: number;
-  [index: number]: PromptHistoryElement;
+  target?: { closest?(selector: string): unknown } | null;
 };
 
 declare const window: {
@@ -41,30 +30,8 @@ declare const window: {
 };
 
 declare const document: {
-  querySelectorAll(selector: string): PromptHistoryElementList;
+  querySelectorAll(selector: string): ArrayLike<PromptHistoryElement>;
 };
-
-const searchSelector = '[aria-label="Search previous prompts"]';
-const buttonSelector =
-  'button[aria-label="Search prompt history"], button[title="Search prompt history"], [role="button"][aria-label="Search prompt history"]';
-
-function onlyElement(selector: string): PromptHistoryElement | null {
-  const elements = document.querySelectorAll(selector);
-  return chooseVisibleElement(Array.from(elements));
-}
-
-function openPromptHistory(): void {
-  if (onlyElement(searchSelector)) {
-    return;
-  }
-
-  const button = onlyElement(buttonSelector);
-  if (!button) {
-    return;
-  }
-
-  button.click();
-}
 
 export function installPromptHistoryHotkey(): () => void {
   if (Platform.OS !== "web") {
@@ -76,9 +43,10 @@ export function installPromptHistoryHotkey(): () => void {
       return;
     }
 
-    event.preventDefault();
-    event.stopPropagation();
-    openPromptHistory();
+    if (openPromptHistory((selector) => document.querySelectorAll(selector))) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   };
 
   window.addEventListener("keydown", handleKeyDown, true);

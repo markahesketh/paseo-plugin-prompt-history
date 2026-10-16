@@ -2,7 +2,7 @@ import type {
   PluginAgentPanelProps,
   PluginButtonContentProps,
 } from "@getpaseo/plugin/client";
-import { usePaseo } from "@getpaseo/plugin/client";
+import { usePaseo, useRpc } from "@getpaseo/plugin/client";
 import {
   FlatList,
   Icon,
@@ -12,14 +12,23 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { FlatList as NativeFlatList } from "react-native";
-import { rankPrompts, type PromptRecord } from "./fuzzy";
+import {
+  removeQueuedPromptRpc,
+  resumeQueueRpc,
+  sendPromptRpc,
+  type AgentQueue,
+  type QueueSnapshot,
+} from "../shared/queue";
+import { deduplicatePrompts, rankPrompts, type PromptRecord, type RankedPrompt } from "./fuzzy";
 import { promptsFromTimeline } from "./history";
-import { getQueuedPrompts, sendPrompt, subscribePromptQueue } from "./send";
+import { queueStore } from "./queue";
+import { moveSelection, selectedIndex } from "./selection";
 
 const PAGE_SIZE = 100;
 const MAX_PAGES_PER_AGENT = 20;
 const MAX_CONCURRENT_AGENT_LOADS = 4;
 const HOST_FOCUS_SETTLE_DELAY_MS = 200;
+const QUEUE_PREVIEW_COUNT = 3;
 
 type Paseo = ReturnType<typeof usePaseo>;
 type Timeline = ReturnType<Paseo["agents"]["ref"]>["timeline"];
@@ -28,6 +37,8 @@ type TimelineCursor = NonNullable<TimelineRefetchOptions["cursor"]>;
 type AgentDirectoryEntry = Awaited<ReturnType<Paseo["agents"]["list"]>>["entries"][number];
 type LoadSignal = { cancelled: boolean; abortSignal: AbortSignal };
 type PromptBatchHandler = (prompts: PromptRecord[]) => void;
+type Theme = PluginButtonContentProps["theme"];
+type Layout = PluginButtonContentProps["layout"];
 
 const promptCache = new Map<string, { updatedAt: string; prompts: PromptRecord[] }>();
 
@@ -54,6 +65,8 @@ async function loadAgentPrompts(
   const timeline = paseo.agents.ref(agent.id).timeline;
   const prompts: PromptRecord[] = [];
   let cursor: TimelineCursor | undefined;
+  let entriesRead = 0;
+  let complete = true;
 
   for (let pageNumber = 0; pageNumber < MAX_PAGES_PER_AGENT; pageNumber += 1) {
     if (signal.cancelled) {
@@ -68,10 +81,17 @@ async function loadAgentPrompts(
     });
 
     if (page.error) {
-      throw new Error(page.error);
+      if (pageNumber === 0) {
+        throw new Error(page.error);
+      }
+      // Keep the newer pages that were read, but read them again next time.
+      console.warn(`Could not read older prompt history for ${agent.id}`, page.error);
+      complete = false;
+      break;
     }
 
-    prompts.push(...promptsFromTimeline(agent, page.entries));
+    prompts.push(...promptsFromTimeline(agent, page.entries, entriesRead));
+    entriesRead += page.entries.length;
 
     if (!page.hasOlder || page.startCursor === null || page.startCursor === undefined) {
       break;
@@ -79,7 +99,7 @@ async function loadAgentPrompts(
     cursor = page.startCursor;
   }
 
-  if (!signal.cancelled) {
+  if (complete && !signal.cancelled) {
     promptCache.set(agent.id, { updatedAt: agent.updatedAt, prompts });
   }
 
@@ -148,37 +168,147 @@ function formatPrompt(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function useAgentQueue(agentId: string): AgentQueue | null {
+  const [queue, setQueue] = useState(() => queueStore()?.get(agentId) ?? null);
+
+  useEffect(() => {
+    const store = queueStore();
+    setQueue(store?.get(agentId) ?? null);
+    return store?.subscribe(() => setQueue(store.get(agentId)));
+  }, [agentId]);
+
+  return queue;
+}
+
+function QueuedPrompts({
+  theme,
+  queue,
+  onChanged,
+}: {
+  theme: Theme;
+  queue: AgentQueue;
+  onChanged: (snapshot: QueueSnapshot) => void;
+}) {
+  const toast = useToast();
+  const removeQueuedPrompt = useRpc(removeQueuedPromptRpc);
+  const resumeQueue = useRpc(resumeQueueRpc);
+  const [busy, setBusy] = useState(false);
+
+  async function run(action: () => Promise<QueueSnapshot>, failure: string) {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      onChanged(await action());
+    } catch (error: unknown) {
+      toast.error(errorMessage(error, failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const styles = {
+    box: {
+      padding: 10,
+      borderRadius: 7,
+      borderWidth: 1,
+      borderColor: theme.colors.accent,
+      backgroundColor: theme.colors.surface2,
+      gap: 6,
+    },
+    title: { color: theme.colors.accent, fontSize: 12, fontWeight: "600" as const },
+    paused: { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 16 },
+    row: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8 },
+    text: { flex: 1, color: theme.colors.foreground, fontSize: 12, lineHeight: 16 },
+    action: { color: theme.colors.accent, fontSize: 12, fontWeight: "600" as const },
+  };
+
+  return (
+    <View style={styles.box}>
+      <Text style={styles.title}>Queued for this agent · {queue.prompts.length}</Text>
+      {queue.paused ? (
+        <View style={styles.row}>
+          <Text style={styles.paused}>{queue.paused}</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send the next queued prompt"
+            disabled={busy}
+            onPress={() =>
+              void run(() => resumeQueue({ agentId: queue.agentId }), "Could not resume the queue.")
+            }
+          >
+            <Text style={styles.action}>Send next</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {queue.prompts.slice(0, QUEUE_PREVIEW_COUNT).map((prompt) => (
+        <View key={prompt.id} style={styles.row}>
+          <Text numberOfLines={2} style={styles.text}>
+            {formatPrompt(prompt.text)}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Remove queued prompt: ${formatPrompt(prompt.text)}`}
+            disabled={busy}
+            onPress={() =>
+              void run(
+                () => removeQueuedPrompt({ agentId: queue.agentId, promptId: prompt.id }),
+                "Could not remove the queued prompt.",
+              )
+            }
+          >
+            <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
+          </Pressable>
+        </View>
+      ))}
+      {queue.prompts.length > QUEUE_PREVIEW_COUNT ? (
+        <Text style={styles.text}>+{queue.prompts.length - QUEUE_PREVIEW_COUNT} more</Text>
+      ) : null}
+    </View>
+  );
+}
+
 function PromptHistoryContent({
   theme,
   layout,
   agentId,
   onClose,
 }: {
-  theme: PluginButtonContentProps["theme"];
-  layout: PluginButtonContentProps["layout"];
+  theme: Theme;
+  layout: Layout;
   agentId: string;
   onClose: () => void;
 }) {
   const paseo = usePaseo();
   const toast = useToast();
+  const sendPromptToQueue = useRpc(sendPromptRpc);
   const searchRef = useRef<React.ElementRef<typeof TextInput>>(null);
   const editorRef = useRef<React.ElementRef<typeof TextInput>>(null);
-  const resultsRef = useRef<NativeFlatList<PromptRecord>>(null);
+  const resultsRef = useRef<NativeFlatList<RankedPrompt>>(null);
   const [query, setQuery] = useState("");
   const [prompts, setPrompts] = useState<PromptRecord[]>([]);
   const [draft, setDraft] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [queuedPrompts, setQueuedPrompts] = useState<string[]>(() => [
-    ...getQueuedPrompts(agentId),
-  ]);
+  const queue = useAgentQueue(agentId);
   const sendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const matches = useMemo(() => rankPrompts(prompts, query), [prompts, query]);
-  const safeSelectedIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0));
+  const uniquePrompts = useMemo(() => deduplicatePrompts(prompts), [prompts]);
+  const matches = useMemo(() => rankPrompts(uniquePrompts, query), [uniquePrompts, query]);
+  const safeSelectedIndex = selectedIndex(matches, selectedId);
   const selected = matches[safeSelectedIndex];
+  // Touch screens have no Tab key, and a tap can be a mistaken scroll, so a
+  // tap opens the editor there. With a pointer, a click sends the prompt.
+  const tapEdits = layout.platform !== "web" || layout.compact;
+  // On compact layouts the host owns the only vertical scroller.
+  const ownScroller = !layout.compact;
 
   const styles = useMemo(
     () => ({
@@ -202,16 +332,6 @@ function PromptHistoryContent({
         boxSizing: "border-box" as const,
       },
       hint: { color: theme.colors.foregroundMuted, fontSize: 11 },
-      queued: {
-        padding: 10,
-        borderRadius: 7,
-        borderWidth: 1,
-        borderColor: theme.colors.accent,
-        backgroundColor: theme.colors.surface2,
-        gap: 5,
-      },
-      queuedTitle: { color: theme.colors.accent, fontSize: 12, fontWeight: "600" as const },
-      queuedText: { color: theme.colors.foreground, fontSize: 12, lineHeight: 16 },
       result: {
         paddingVertical: 8,
         paddingHorizontal: 10,
@@ -223,6 +343,7 @@ function PromptHistoryContent({
       resultMeta: { color: theme.colors.foregroundMuted, fontSize: 10, lineHeight: 14 },
       empty: { color: theme.colors.foregroundMuted, paddingVertical: 10, fontSize: 12 },
       results: { maxHeight: 320, flexGrow: 0 },
+      plainResults: { gap: 4 },
       editor: {
         minHeight: 100,
         padding: 12,
@@ -247,6 +368,7 @@ function PromptHistoryContent({
     [layout.compact, theme],
   );
 
+  // History covers every agent, so it does not depend on the selected agent.
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
@@ -267,7 +389,7 @@ function PromptHistoryContent({
     })
       .catch((loadError: unknown) => {
         if (active) {
-          setError(loadError instanceof Error ? loadError.message : "Could not load prompt history.");
+          setError(errorMessage(loadError, "Could not load prompt history."));
         }
       })
       .finally(() => {
@@ -281,16 +403,7 @@ function PromptHistoryContent({
       signal.cancelled = true;
       controller.abort();
     };
-  }, [agentId, paseo]);
-
-  useEffect(() => {
-    setQueuedPrompts([...getQueuedPrompts(agentId)]);
-    return subscribePromptQueue((queuedAgentId, messages) => {
-      if (queuedAgentId === agentId) {
-        setQueuedPrompts([...messages]);
-      }
-    });
-  }, [agentId]);
+  }, [paseo]);
 
   useEffect(() => {
     let active = true;
@@ -309,41 +422,47 @@ function PromptHistoryContent({
   }, []);
 
   useEffect(() => {
-    setSelectedIndex(0);
+    setSelectedId(null);
   }, [query]);
 
+  // Hold the default selection on its prompt, so a later batch that ranks
+  // above it does not change what Enter sends.
   useEffect(() => {
-    setSelectedIndex((index) => Math.min(index, Math.max(matches.length - 1, 0)));
-  }, [matches.length]);
+    if (selectedId === null && matches[0]) {
+      setSelectedId(matches[0].id);
+    }
+  }, [matches, selectedId]);
 
   useEffect(() => {
-    if (matches.length > 0) {
+    if (ownScroller && matches.length > 0) {
       resultsRef.current?.scrollToIndex({
         index: safeSelectedIndex,
         viewPosition: 0.5,
         animated: false,
       });
     }
-  }, [matches.length, safeSelectedIndex]);
+  }, [ownScroller, matches.length, safeSelectedIndex]);
 
   async function send(text: string): Promise<void> {
-    const trimmed = text.trim();
-    if (!trimmed || sendingRef.current) {
+    if (!text.trim() || sendingRef.current) {
       return;
     }
 
     sendingRef.current = true;
     setSending(true);
     try {
-      const result = await sendPrompt(paseo, agentId, trimmed);
+      const { result, snapshot } = await sendPromptToQueue({ agentId, text });
+      queueStore()?.apply(snapshot);
       if (result === "queued") {
-        toast.show("Prompt queued. It will send when the agent is idle.", { variant: "success" });
+        toast.show("Prompt queued. It will send when the agent finishes its turn.", {
+          variant: "success",
+        });
       } else {
         toast.show("Prompt sent", { variant: "success" });
         onClose();
       }
     } catch (sendError: unknown) {
-      toast.error(sendError instanceof Error ? sendError.message : "Could not send prompt.");
+      toast.error(errorMessage(sendError, "Could not send prompt."));
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -360,10 +479,10 @@ function PromptHistoryContent({
     const key = event.nativeEvent.key;
     if (key === "ArrowDown") {
       event.preventDefault?.();
-      setSelectedIndex((index) => Math.min(index + 1, Math.max(matches.length - 1, 0)));
+      setSelectedId(moveSelection(matches, selected?.id ?? null, 1));
     } else if (key === "ArrowUp") {
       event.preventDefault?.();
-      setSelectedIndex((index) => Math.max(index - 1, 0));
+      setSelectedId(moveSelection(matches, selected?.id ?? null, -1));
     } else if (key === "Enter" && !event.nativeEvent.isComposing && selected) {
       event.preventDefault?.();
       void send(selected.text);
@@ -382,6 +501,38 @@ function PromptHistoryContent({
       event.preventDefault?.();
       void send(draft);
     }
+  }
+
+  function renderResult(prompt: RankedPrompt, index: number) {
+    const active = index === safeSelectedIndex;
+    return (
+      <Pressable
+        key={prompt.id}
+        accessibilityLabel={formatPrompt(prompt.text)}
+        accessibilityHint={tapEdits ? "Opens the prompt for editing" : "Sends the prompt"}
+        role="button"
+        aria-selected={active}
+        onPress={() => {
+          setSelectedId(prompt.id);
+          if (tapEdits) {
+            addToEditor(prompt);
+          } else {
+            void send(prompt.text);
+          }
+        }}
+        style={{
+          ...styles.result,
+          backgroundColor: active ? theme.colors.surface2 : "transparent",
+          borderColor: active ? theme.colors.accent : theme.colors.border,
+          borderLeftWidth: active ? 2 : 1,
+        }}
+      >
+        <Text numberOfLines={2} style={styles.resultText}>
+          {formatPrompt(prompt.text)}
+        </Text>
+        <Text style={styles.resultMeta}>{prompt.agentLabel}</Text>
+      </Pressable>
+    );
   }
 
   return (
@@ -403,22 +554,16 @@ function PromptHistoryContent({
         onKeyPress={handleSearchKeyPress}
         style={styles.search}
       />
-      <Text style={styles.hint}>↑↓ choose · Enter send · Tab edit here · Cmd/Ctrl+Enter send</Text>
+      <Text style={styles.hint}>
+        {layout.platform !== "web"
+          ? "Tap a prompt to edit it, then send"
+          : tapEdits
+            ? "↑↓ choose · Enter send · Tab or click to edit · Cmd/Ctrl+Enter send"
+            : "↑↓ choose · Enter send · Tab edit here · Cmd/Ctrl+Enter send"}
+      </Text>
 
-      {queuedPrompts.length > 0 ? (
-        <View style={styles.queued}>
-          <Text style={styles.queuedTitle}>
-            Queued for this agent · {queuedPrompts.length}
-          </Text>
-          {queuedPrompts.slice(0, 3).map((prompt, index) => (
-            <Text key={`${index}:${prompt}`} numberOfLines={2} style={styles.queuedText}>
-              {formatPrompt(prompt)}
-            </Text>
-          ))}
-          {queuedPrompts.length > 3 ? (
-            <Text style={styles.queuedText}>+{queuedPrompts.length - 3} more</Text>
-          ) : null}
-        </View>
+      {queue ? (
+        <QueuedPrompts theme={theme} queue={queue} onChanged={(next) => queueStore()?.apply(next)} />
       ) : null}
 
       {loading ? <Text style={styles.empty}>Loading prompt history…</Text> : null}
@@ -427,43 +572,26 @@ function PromptHistoryContent({
         <Text style={styles.empty}>{query ? "No matching prompts." : "No previous prompts found."}</Text>
       ) : null}
       {!error && matches.length > 0 ? (
-        <View accessibilityRole="menu">
-          <FlatList
-            ref={resultsRef}
-            data={matches}
-            extraData={safeSelectedIndex}
-            keyExtractor={(prompt) => prompt.id}
-            keyboardShouldPersistTaps="handled"
-            onScrollToIndexFailed={({ index, averageItemLength }) => {
-              resultsRef.current?.scrollToOffset({
-                offset: averageItemLength * index,
-                animated: false,
-              });
-            }}
-            style={styles.results}
-            renderItem={({ item: prompt, index }) => {
-              const active = index === safeSelectedIndex;
-              return (
-                <Pressable
-                  accessibilityLabel={formatPrompt(prompt.text)}
-                  accessibilityRole="menuitem"
-                  accessibilityState={{ selected: active }}
-                  onPress={() => void send(prompt.text)}
-                  style={{
-                    ...styles.result,
-                    backgroundColor: active ? theme.colors.surface2 : "transparent",
-                    borderColor: active ? theme.colors.accent : theme.colors.border,
-                    borderLeftWidth: active ? 2 : 1,
-                  }}
-                >
-                  <Text numberOfLines={2} style={styles.resultText}>
-                    {formatPrompt(prompt.text)}
-                  </Text>
-                  <Text style={styles.resultMeta}>{prompt.agentLabel}</Text>
-                </Pressable>
-              );
-            }}
-          />
+        <View role="list" accessibilityLabel="Previous prompts">
+          {ownScroller ? (
+            <FlatList
+              ref={resultsRef}
+              data={matches}
+              extraData={safeSelectedIndex}
+              keyExtractor={(prompt) => prompt.id}
+              keyboardShouldPersistTaps="handled"
+              onScrollToIndexFailed={({ index, averageItemLength }) => {
+                resultsRef.current?.scrollToOffset({
+                  offset: averageItemLength * index,
+                  animated: false,
+                });
+              }}
+              style={styles.results}
+              renderItem={({ item, index }) => renderResult(item, index)}
+            />
+          ) : (
+            <View style={styles.plainResults}>{matches.map(renderResult)}</View>
+          )}
         </View>
       ) : null}
 

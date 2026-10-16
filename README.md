@@ -11,9 +11,10 @@ Prompt history adds a native-looking `History` control to each active agent comp
 - Keyboard-first navigation with clear selection state.
 - Immediate sending with `Enter`.
 - Edit-before-send with `Tab`, then `Cmd+Enter` or `Ctrl+Enter`.
+- Tap-to-edit on phones and narrow windows, so a tap never sends a prompt by accident.
 - A Command Center entry for opening history when the composer pill is not visible.
-- A visible queue indicator when the selected agent is busy.
-- Queue previews in the popover and a live count on the `History` composer pill.
+- A queue on the daemon for prompts sent while an agent is busy. It keeps working when you close the app.
+- Queue previews in the popover, a live count on the `History` composer pill, and a control to remove each queued prompt.
 - Native Paseo colours and spacing in light and dark themes.
 - No external service, account, or telemetry.
 
@@ -29,7 +30,11 @@ Prompt history adds a native-looking `History` control to each active agent comp
    - Press `Tab` to place it in the plugin editor.
    - Change the text, then press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux.
 
-If the agent is running, the prompt is placed in the plugin queue. The popover remains open and shows the queued prompts. The composer pill changes to `History · N queued`. Paseo sends queued prompts as the agent becomes idle.
+On a phone or in a narrow window, tap a prompt to open it in the editor, then tap `Send`.
+
+If the agent is running, the prompt goes into the queue. The popover stays open and shows the queued prompts. The composer pill changes to `History · N queued`. When a turn completes, the plugin sends the next queued prompt. It sends one prompt for each turn, in order.
+
+If a turn is stopped or fails, the queue pauses and sends nothing. The popover shows the reason. Select `Send next` to continue, or remove the prompts you do not want.
 
 You can also open the feature from the Command Center with `Cmd+K` on macOS or `Ctrl+K` on Windows and Linux, then search for `Search prompt history`.
 
@@ -46,7 +51,7 @@ paseo plugin install https://github.com/markahesketh/paseo-plugin-prompt-history
 Paseo trusts the plugin source and loads it immediately. Check the installation with:
 
 ```sh
-paseo plugin status prompt-history --json
+paseo plugin ls prompt-history
 ```
 
 To reload the plugin after a local change:
@@ -71,10 +76,12 @@ paseo plugin install "$PWD"
 
 ## Requirements
 
-- Paseo `>=0.9.1 <0.10.0`.
-- The Paseo desktop web client for the `Ctrl+R` shortcut.
+- Paseo `>=0.9.1 <0.12.0`, on both the daemon and each app that connects to it.
+- The Paseo web or desktop client for the `Ctrl+R` shortcut.
 
-The plugin is not installed on iOS or Android. Paseo controls which timeline entries are available to the plugin.
+The plugin also runs in the iOS and Android apps. There, it has no `Ctrl+R` shortcut and a tap opens the editor. Paseo controls which timeline entries are available to the plugin.
+
+`Ctrl+R` opens history only when exactly one `History` pill is visible. If it cannot open history, the key keeps its usual function.
 
 ## Development
 
@@ -86,30 +93,42 @@ npm run typecheck
 npm test
 ```
 
-The test suite covers prompt extraction, fuzzy ranking, keyboard behaviour, queue behaviour, and the web shortcut seam.
+The tests are in `test/`. They cover prompt extraction, fuzzy ranking, result selection, the `Ctrl+R` match and target choice, the client queue mirror, and the daemon queue. The daemon queue tests use a fake daemon. Component key handling has no tests. Development needs Node.js 22.6 or later.
 
 ## Design notes
 
 The plugin uses only the Paseo plugin APIs:
 
-- Agent subscriptions provide the active agent list and activity updates.
+- Agent subscriptions provide the active agent list.
 - Timeline pagination provides historical user messages.
 - Composer pills provide the entry point for each active agent.
-- A plugin-owned editor handles the `Tab` workflow because Paseo 0.9.1 does not expose an API for changing the native composer draft.
+- Daemon lifecycle hooks (`agent.turn_started`, `agent.turn_ended`, `agent.archived`) drive the queue.
+- Plugin RPCs connect the client to the daemon queue.
+- A plugin-owned editor handles the `Tab` workflow because Paseo does not expose an API for changing the native composer draft.
 
 History is loaded when the panel or popover opens. It reads up to 20 pages of 100 timeline entries per agent, caches results until an agent changes, removes duplicate prompt text, and ranks matches by fuzzy relevance and recency.
 
-The send queue is intentionally local to the running plugin. It is not persisted across Paseo restarts. A queued prompt is removed from the indicator after Paseo accepts it for sending.
+The send queue is on the daemon. Thus all apps connected to the daemon share it, and it continues when no app is connected. It is kept in memory, so a daemon restart or a plugin reload deletes it. A queued prompt is removed from the queue after the daemon accepts it.
+
+The queue sends the next prompt when Paseo reports that a turn ended. It does not wait for the agent status to change to idle, because the Paseo SDK says that change is not a reliable turn-end signal. Paseo delivers hook events on a best-effort basis, so the plugin also checks queues every 5 seconds. If it sees an idle agent with queued prompts, it sends the next one. After the plugin sends a prompt, this check waits 60 seconds before it trusts an idle status. Each queued prompt keeps the same message ID when it is sent again.
+
+The daemon cannot push queue changes to the app. The app reads the queue again after each agent update, and every 10 seconds.
 
 ## Project structure
 
 ```text
-index.client.tsx       Paseo client contribution and composer controls
+index.client.tsx           Paseo client contribution and composer controls
+index.server.ts            Daemon hooks, queue RPCs, and the fallback check
 client/prompt-history.tsx  Search, results, editor, and queue UI
-client/history.ts       Timeline parsing and pagination helpers
-client/fuzzy.ts         Prompt normalisation, deduplication, and ranking
-client/send.ts          Agent-aware sending and the local queue
-client/web.ts           Web-only Ctrl+R integration
+client/history.ts          Timeline parsing helpers
+client/fuzzy.ts            Prompt normalisation, deduplication, and ranking
+client/selection.ts        Result selection that follows the prompt
+client/queue.ts            Client mirror of the daemon queue
+client/element.ts          Ctrl+R target choice
+client/web.ts              Web-only Ctrl+R integration
+server/queue.ts            Daemon queue logic
+shared/queue.ts            Queue RPC contracts
+test/                      Node test runner tests
 ```
 
 ## License

@@ -25,9 +25,15 @@ export function promptText(item: unknown): string | null {
   return text && text.trim() ? text : null;
 }
 
+/**
+ * Pages are read from newest to oldest. `newerEntryCount` is the number of
+ * entries already read from newer pages. It gives entries without `seqStart`
+ * a sequence that is unique for the agent and still orders them by age.
+ */
 export function promptsFromTimeline(
   agent: { id: string; title?: string | null },
   entries: readonly TimelineEntry[],
+  newerEntryCount = 0,
 ): PromptRecord[] {
   return entries.flatMap((entry, index) => {
     const text = promptText(entry.item);
@@ -35,13 +41,15 @@ export function promptsFromTimeline(
       return [];
     }
 
+    const sequence = entry.seqStart ?? index - entries.length - newerEntryCount;
+    const id = entry.seqStart === undefined ? `${agent.id}:page:${sequence}` : `${agent.id}:${sequence}`;
     return [
       {
-        id: `${agent.id}:${entry.seqStart ?? index}`,
+        id,
         agentId: agent.id,
         agentLabel: agent.title ?? agent.id,
         text,
-        sequence: entry.seqStart ?? index,
+        sequence,
         createdAt: entry.timestamp,
       },
     ];

@@ -36,7 +36,8 @@ function comparePromptRecency(left: PromptRecord, right: PromptRecord): number {
   return left.sequence - right.sequence;
 }
 
-function deduplicatePrompts(prompts: readonly PromptRecord[]): PromptRecord[] {
+/** Keeps the newest copy of each prompt text. */
+export function deduplicatePrompts(prompts: readonly PromptRecord[]): PromptRecord[] {
   const unique = new Map<string, PromptRecord>();
   for (const prompt of prompts) {
     const key = normalise(prompt.text);
@@ -81,12 +82,13 @@ function fuzzyScore(query: string, candidate: string): number | null {
   return queryIndex === needle.length ? 500 + score - haystack.length / 100 : null;
 }
 
+/** Expects prompts that `deduplicatePrompts` has already processed. */
 export function rankPrompts(
   prompts: readonly PromptRecord[],
   query: string,
   limit = 30,
 ): RankedPrompt[] {
-  return deduplicatePrompts(prompts)
+  return prompts
     .map((prompt) => {
       const score = fuzzyScore(query, prompt.text);
       return score === null ? null : { ...prompt, score };

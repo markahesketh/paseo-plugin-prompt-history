@@ -3,17 +3,19 @@ import type {
   PluginClientContext,
 } from "@getpaseo/plugin/client";
 import { PromptHistoryPanel, PromptHistoryPopover } from "./client/prompt-history";
-import {
-  getQueuedPrompts,
-  installPromptSendQueue,
-  observePromptAgent,
-  subscribePromptQueue,
-} from "./client/send";
+import { createQueueStore, installQueueStore } from "./client/queue";
 import { installPromptHistoryHotkey } from "./client/web";
+import { listQueuesRpc } from "./shared/queue";
+
+// The daemon cannot push queue changes, so the client reads them again after
+// agent activity and on this interval.
+const QUEUE_POLL_INTERVAL_MS = 10_000;
+const QUEUE_REFRESH_DELAY_MS = 300;
 
 export default function contribute(client: PluginClientContext) {
   const removeHotkey = installPromptHistoryHotkey();
-  const removePromptSendQueue = installPromptSendQueue(client.paseo);
+  const queues = createQueueStore(() => client.rpc(listQueuesRpc, {}));
+  const removeQueueStore = installQueueStore(queues);
 
   const removeWorkspacePanel = client.addWorkspacePanel({
     id: "prompt-history",
@@ -40,6 +42,24 @@ export default function contribute(client: PluginClientContext) {
   >();
   const lifetime = new AbortController();
   let stopped = false;
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const refreshQueues = () => {
+    void queues.refresh().catch((error: unknown) => {
+      if (!stopped) {
+        console.warn("Could not read the prompt queue", error);
+      }
+    });
+  };
+  const scheduleQueueRefresh = () => {
+    if (refreshTimer === null) {
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        refreshQueues();
+      }, QUEUE_REFRESH_DELAY_MS);
+    }
+  };
+  const pollTimer = setInterval(refreshQueues, QUEUE_POLL_INTERVAL_MS);
 
   function queuedLabel(count: number): string {
     return count === 0 ? "History" : `History · ${count} queued`;
@@ -76,7 +96,7 @@ export default function contribute(client: PluginClientContext) {
       return;
     }
 
-    const queuedCount = getQueuedPrompts(agent.id).length;
+    const queuedCount = queues.get(agent.id)?.prompts.length ?? 0;
     const existing = pills.get(agent.id);
     if (existing?.workspaceId === agent.workspaceId) {
       updateQueuedCount(agent.id, queuedCount);
@@ -105,9 +125,12 @@ export default function contribute(client: PluginClientContext) {
     });
   };
 
-  const removePromptQueueSubscription = subscribePromptQueue((agentId, messages) => {
-    updateQueuedCount(agentId, messages.length);
+  const removeQueueSubscription = queues.subscribe(() => {
+    for (const agentId of pills.keys()) {
+      updateQueuedCount(agentId, queues.get(agentId)?.prompts.length ?? 0);
+    }
   });
+  refreshQueues();
 
   void client.paseo.agents
     .list({ subscribe: {}, signal: lifetime.signal })
@@ -122,7 +145,6 @@ export default function contribute(client: PluginClientContext) {
           const snapshotAgentIds = new Set<string>();
           for (const { agent } of entries) {
             snapshotAgentIds.add(agent.id);
-            observePromptAgent(agent);
             registerPill(agent);
           }
           for (const agentId of pills.keys()) {
@@ -139,9 +161,9 @@ export default function contribute(client: PluginClientContext) {
           if (message.payload.kind === "remove") {
             removePill(message.payload.agentId);
           } else {
-            observePromptAgent(message.payload.agent);
             registerPill(message.payload.agent);
           }
+          scheduleQueueRefresh();
         },
       });
     })
@@ -152,10 +174,14 @@ export default function contribute(client: PluginClientContext) {
     });
 
   return () => {
-    removeHotkey();
-    removePromptQueueSubscription();
-    removePromptSendQueue();
     stopped = true;
+    removeHotkey();
+    clearInterval(pollTimer);
+    if (refreshTimer !== null) {
+      clearTimeout(refreshTimer);
+    }
+    removeQueueSubscription();
+    removeQueueStore();
     lifetime.abort();
     removeWorkspacePanel();
     removeCommandCenterItem();
