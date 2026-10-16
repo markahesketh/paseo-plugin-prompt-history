@@ -178,8 +178,7 @@ function PromptHistoryContent({
   const queue = useAgentQueue(agentId);
   const sendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const uniquePrompts = useMemo(() => deduplicatePrompts(prompts), [prompts]);
-  const matches = useMemo(() => rankPrompts(uniquePrompts, query), [uniquePrompts, query]);
+  const matches = useMemo(() => rankPrompts(prompts, query), [prompts, query]);
   const safeSelectedIndex = selectedIndex(matches, selectedId);
   const selected = matches[safeSelectedIndex];
   // Touch screens have no Tab key, and a tap can be a mistaken scroll, so a
@@ -254,13 +253,7 @@ function PromptHistoryContent({
     setError(null);
     setPrompts([]);
     void loadPromptHistory(paseo, signal, (batch) => {
-      setPrompts((current) => {
-        const byId = new Map(current.map((prompt) => [prompt.id, prompt]));
-        for (const prompt of batch) {
-          byId.set(prompt.id, prompt);
-        }
-        return [...byId.values()];
-      });
+      setPrompts((current) => deduplicatePrompts([...current, ...batch]));
     })
       .catch((loadError: unknown) => {
         if (!signal.aborted) {
@@ -277,19 +270,11 @@ function PromptHistoryContent({
   }, [paseo]);
 
   useEffect(() => {
-    let active = true;
-    const focusSearch = () => {
-      if (active) {
-        searchRef.current?.focus();
-      }
-    };
+    const focusSearch = () => searchRef.current?.focus();
 
     focusSearch();
     const timer = setTimeout(focusSearch, HOST_FOCUS_SETTLE_DELAY_MS);
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
