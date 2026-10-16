@@ -107,8 +107,17 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
     return result;
   }
 
-  function withinGrace(turn: Turn | null): boolean {
-    return turn !== null && deps.now() - turn.since < TURN_START_GRACE_MS;
+  // Our own turn record is trusted for the grace window; after that the daemon
+  // decides, so a missed turn end cannot hold an agent busy forever.
+  async function availability(agentId: string, current: AgentState): Promise<DaemonStatus> {
+    if (current.turn !== null && deps.now() - current.turn.since < TURN_START_GRACE_MS) {
+      return "busy";
+    }
+    const status = await deps.status(agentId);
+    if (status === "idle") {
+      current.turn = null;
+    }
+    return status;
   }
 
   async function sendNext(agentId: string, current: AgentState): Promise<void> {
@@ -139,8 +148,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
         try {
           if (
             current.prompts.length > 0 ||
-            current.turn !== null ||
-            (await deps.status(agentId)) === "busy"
+            (await availability(agentId, current)) === "busy"
           ) {
             current.prompts.push({
               id: deps.newId(),
@@ -162,7 +170,10 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
 
     turnStarted(agentId, turnId) {
       return exclusive(agentId, async () => {
-        state(agentId).turn = { phase: "running", turnId, since: deps.now() };
+        const current = agents.get(agentId);
+        if (current) {
+          current.turn = { phase: "running", turnId, since: deps.now() };
+        }
       });
     },
 
@@ -203,14 +214,9 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
             if (!current || current.prompts.length === 0 || current.paused !== null) {
               return;
             }
-            if (withinGrace(current.turn)) {
+            if ((await availability(agentId, current)) === "busy") {
               return;
             }
-            if ((await deps.status(agentId)) === "busy") {
-              return;
-            }
-
-            current.turn = null;
             await sendNext(agentId, current);
           }),
         ),
@@ -240,7 +246,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
         }
 
         current.paused = null;
-        if (current.turn === null && (await deps.status(agentId)) === "idle") {
+        if ((await availability(agentId, current)) === "idle") {
           await sendNext(agentId, current);
         }
         prune(agentId);
