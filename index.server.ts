@@ -1,4 +1,6 @@
-import type { PluginHookContext, PluginServerContext } from "@getpaseo/plugin/server";
+/// <reference types="node" />
+import { randomUUID } from "node:crypto";
+import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { daemonStatus } from "./server/daemon-status";
 import { createPromptQueue } from "./server/queue";
 import {
@@ -10,27 +12,24 @@ import {
 
 const SWEEP_INTERVAL_MS = 5_000;
 
-type PaseoApi = PluginHookContext["paseo"];
-
-let nextId = 0;
-function newId(): string {
-  nextId += 1;
-  return `${Date.now().toString(36)}-${nextId.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
+type PaseoApi = PluginHandlerContext["paseo"];
 
 export default function contribute(server: PluginServerContext) {
   // The server context has no Paseo API of its own. Hooks and RPC handlers
   // each receive the plugin's one connection, so keep the latest one.
   let paseo: PaseoApi | null = null;
-  const remember = (api: PaseoApi) => {
-    paseo = api;
-  };
   const requirePaseo = () => {
     if (!paseo) {
       throw new Error("Prompt history is not connected to Paseo yet.");
     }
     return paseo;
   };
+  const connected =
+    <Input, Result>(handler: (input: Input) => Result) =>
+    (input: Input, context: PluginHandlerContext): Result => {
+      paseo = context.paseo;
+      return handler(input);
+    };
 
   const queue = createPromptQueue({
     async send(agentId, text, messageId) {
@@ -39,60 +38,60 @@ export default function contribute(server: PluginServerContext) {
     async status(agentId) {
       return daemonStatus(await requirePaseo().agents.ref(agentId).refresh());
     },
-    newId,
+    newId: randomUUID,
     now: Date.now,
   });
 
-  const removeTurnStarted = server.on("agent.turn_started", async (event, context) => {
-    remember(context.paseo);
-    await queue.turnStarted(event.agent.id, event.turnId);
-  });
-  const removeTurnEnded = server.on("agent.turn_ended", async (event, context) => {
-    remember(context.paseo);
-    await queue.turnEnded(event.agent.id, event);
-  });
-  const removeArchived = server.on("agent.archived", async (event, context) => {
-    remember(context.paseo);
-    await queue.forget(event.agent.id);
-  });
+  const removeHooks = [
+    server.on(
+      "agent.turn_started",
+      connected((event) => queue.turnStarted(event.agent.id, event.turnId)),
+    ),
+    server.on(
+      "agent.turn_ended",
+      connected((event) => queue.turnEnded(event.agent.id, event)),
+    ),
+    server.on(
+      "agent.archived",
+      connected((event) => queue.forget(event.agent.id)),
+    ),
+  ];
 
-  server.handle(sendPromptRpc, async ({ agentId, text }, context) => {
-    remember(context.paseo);
-    const result = await queue.send(agentId, text);
-    return { result, snapshot: queue.snapshot() };
-  });
-  server.handle(listQueuesRpc, (_input, context) => {
-    remember(context.paseo);
-    return queue.snapshot();
-  });
-  server.handle(removeQueuedPromptRpc, async ({ agentId, promptId }, context) => {
-    remember(context.paseo);
-    await queue.remove(agentId, promptId);
-    return queue.snapshot();
-  });
-  server.handle(resumeQueueRpc, async ({ agentId }, context) => {
-    remember(context.paseo);
-    await queue.resume(agentId);
-    return queue.snapshot();
-  });
+  server.handle(
+    sendPromptRpc,
+    connected(async ({ agentId, text }) => {
+      const result = await queue.send(agentId, text);
+      return { result, snapshot: queue.snapshot() };
+    }),
+  );
+  server.handle(
+    listQueuesRpc,
+    connected(() => queue.snapshot()),
+  );
+  server.handle(
+    removeQueuedPromptRpc,
+    connected(async ({ agentId, promptId }) => {
+      await queue.remove(agentId, promptId);
+      return queue.snapshot();
+    }),
+  );
+  server.handle(
+    resumeQueueRpc,
+    connected(async ({ agentId }) => {
+      await queue.resume(agentId);
+      return queue.snapshot();
+    }),
+  );
 
   // Hook delivery is best effort with no replay, so a missed turn end must
-  // not leave prompts waiting forever.
-  let sweeping = false;
-  const sweepTimer = setInterval(() => {
-    if (sweeping || !paseo || !queue.hasQueuedPrompts()) {
-      return;
-    }
-    sweeping = true;
-    void queue.sweep().finally(() => {
-      sweeping = false;
-    });
-  }, SWEEP_INTERVAL_MS);
+  // not leave prompts waiting forever. Sweeps serialise per agent inside the
+  // queue, so one running late cannot double-send.
+  const sweepTimer = setInterval(() => void queue.sweep(), SWEEP_INTERVAL_MS);
 
   return () => {
     clearInterval(sweepTimer);
-    removeTurnStarted();
-    removeTurnEnded();
-    removeArchived();
+    for (const remove of removeHooks) {
+      remove();
+    }
   };
 }

@@ -29,7 +29,6 @@ export type PromptQueue = {
   remove(agentId: string, promptId: string): Promise<void>;
   resume(agentId: string): Promise<void>;
   forget(agentId: string): Promise<void>;
-  hasQueuedPrompts(): boolean;
   snapshot(): QueueSnapshot;
 };
 
@@ -277,10 +276,6 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
       return exclusive(agentId, async () => {
         agents.delete(agentId);
       });
-    },
-
-    hasQueuedPrompts() {
-      return [...agents.values()].some(({ prompts }) => prompts.length > 0);
     },
 
     snapshot() {
