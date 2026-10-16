@@ -2,21 +2,26 @@ import type {
   PluginButtonRegistration,
   PluginClientContext,
 } from "@getpaseo/plugin/client";
-import { PromptHistoryPanel, PromptHistoryPopover } from "./client/prompt-history";
-import { createQueueStore, installQueueStore } from "./client/queue";
 import { historyTitle, pillText } from "./client/labels";
+import { createPromptHistory } from "./client/prompt-history";
+import { createQueueStore } from "./client/queue";
 import { installPromptHistoryHotkey } from "./client/web";
-import { listQueuesRpc } from "./shared/queue";
-
-// The daemon cannot push queue changes, so the client reads them again after
-// agent activity and on this interval.
-const QUEUE_POLL_INTERVAL_MS = 10_000;
-const QUEUE_REFRESH_DELAY_MS = 300;
+import {
+  listQueuesRpc,
+  removeQueuedPromptRpc,
+  resumeQueueRpc,
+  sendPromptRpc,
+} from "./shared/queue";
 
 export default function contribute(client: PluginClientContext) {
   const removeHotkey = installPromptHistoryHotkey();
-  const queues = createQueueStore(() => client.rpc(listQueuesRpc, {}));
-  const removeQueueStore = installQueueStore(queues);
+  const queues = createQueueStore({
+    list: () => client.rpc(listQueuesRpc, {}),
+    send: (input) => client.rpc(sendPromptRpc, input),
+    remove: (input) => client.rpc(removeQueuedPromptRpc, input),
+    resume: (input) => client.rpc(resumeQueueRpc, input),
+  });
+  const { PromptHistoryPanel, PromptHistoryPopover } = createPromptHistory(queues);
 
   const removeWorkspacePanel = client.addWorkspacePanel({
     id: "prompt-history",
@@ -42,25 +47,6 @@ export default function contribute(client: PluginClientContext) {
     { workspaceId: string; registration: PluginButtonRegistration; queuedCount: number }
   >();
   const lifetime = new AbortController();
-  let stopped = false;
-  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const refreshQueues = () => {
-    void queues.refresh().catch((error: unknown) => {
-      if (!stopped) {
-        console.warn("Could not read the prompt queue", error);
-      }
-    });
-  };
-  const scheduleQueueRefresh = () => {
-    if (refreshTimer === null) {
-      refreshTimer = setTimeout(() => {
-        refreshTimer = null;
-        refreshQueues();
-      }, QUEUE_REFRESH_DELAY_MS);
-    }
-  };
-  const pollTimer = setInterval(refreshQueues, QUEUE_POLL_INTERVAL_MS);
 
   const removePill = (agentId: string) => {
     pills.get(agentId)?.registration.remove();
@@ -82,7 +68,7 @@ export default function contribute(client: PluginClientContext) {
     workspaceId?: string | null;
     archivedAt?: string | null;
   }) => {
-    if (stopped || !agent.workspaceId || agent.archivedAt) {
+    if (lifetime.signal.aborted || !agent.workspaceId || agent.archivedAt) {
       removePill(agent.id);
       return;
     }
@@ -112,17 +98,16 @@ export default function contribute(client: PluginClientContext) {
     });
   };
 
-  const removeQueueSubscription = queues.subscribe(() => {
+  queues.subscribe(() => {
     for (const agentId of pills.keys()) {
       updateQueuedCount(agentId, queues.get(agentId)?.prompts.length ?? 0);
     }
   });
-  refreshQueues();
 
   void client.paseo.agents
     .list({ subscribe: {}, signal: lifetime.signal })
     .then(({ subscription }) => {
-      if (stopped) {
+      if (lifetime.signal.aborted) {
         void subscription.release();
         return;
       }
@@ -150,25 +135,19 @@ export default function contribute(client: PluginClientContext) {
           } else {
             registerPill(message.payload.agent);
           }
-          scheduleQueueRefresh();
+          queues.refreshSoon();
         },
       });
     })
     .catch((error) => {
-      if (!stopped) {
+      if (!lifetime.signal.aborted) {
         console.error("Prompt history agent observation failed", error);
       }
     });
 
   return () => {
-    stopped = true;
     removeHotkey();
-    clearInterval(pollTimer);
-    if (refreshTimer !== null) {
-      clearTimeout(refreshTimer);
-    }
-    removeQueueSubscription();
-    removeQueueStore();
+    queues.dispose();
     lifetime.abort();
     removeWorkspacePanel();
     removeCommandCenterItem();
