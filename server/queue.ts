@@ -1,20 +1,28 @@
+import type { PluginTurnOutcome } from "@getpaseo/plugin/server";
+import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { AgentQueue, QueuedPrompt, QueueSnapshot } from "../shared/queue";
 
-export type TurnOutcome = { kind: "completed" } | { kind: "failed" } | { kind: "canceled" };
+export type DaemonStatus = "busy" | "idle";
+
+export type TurnEnd = {
+  turnId: string | null;
+  outcome: PluginTurnOutcome;
+  timeline: readonly AgentTimelineItem[];
+};
 
 export type PromptQueueDeps = {
   /** Resolves when the daemon accepts the prompt. */
   send(agentId: string, text: string, messageId: string): Promise<void>;
   /** Reads the daemon's current view of the agent. */
-  isBusy(agentId: string): Promise<boolean>;
+  status(agentId: string): Promise<DaemonStatus>;
   newId(): string;
   now(): number;
 };
 
 export type PromptQueue = {
   send(agentId: string, text: string): Promise<"sent" | "queued">;
-  turnStarted(agentId: string): Promise<void>;
-  turnEnded(agentId: string, outcome: TurnOutcome): Promise<void>;
+  turnStarted(agentId: string, turnId: string | null): Promise<void>;
+  turnEnded(agentId: string, end: TurnEnd): Promise<void>;
   /** Fallback for missed turn events: drains queues whose agent is idle. */
   sweep(): Promise<void>;
   remove(agentId: string, promptId: string): Promise<void>;
@@ -102,7 +110,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
           if (
             current.prompts.length > 0 ||
             current.turnSince !== null ||
-            (await deps.isBusy(agentId))
+            (await deps.status(agentId)) === "busy"
           ) {
             current.prompts.push({
               id: deps.newId(),
@@ -127,7 +135,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
       });
     },
 
-    turnEnded(agentId, outcome) {
+    turnEnded(agentId, { outcome }) {
       return exclusive(agentId, async () => {
         const current = agents.get(agentId);
         if (!current) {
@@ -166,7 +174,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
             ) {
               return;
             }
-            if (await deps.isBusy(agentId)) {
+            if ((await deps.status(agentId)) === "busy") {
               return;
             }
 
@@ -200,7 +208,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
         }
 
         current.paused = null;
-        if (current.turnSince === null && !(await deps.isBusy(agentId))) {
+        if (current.turnSince === null && (await deps.status(agentId)) === "idle") {
           await sendNext(agentId, current);
         }
         prune(agentId);
