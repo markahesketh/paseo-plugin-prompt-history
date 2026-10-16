@@ -48,7 +48,7 @@ type AgentState = {
 };
 
 // A sent prompt can take a moment to show as running. Until this time passes,
-// the sweep trusts our own record of the turn over the daemon's status.
+// the queue trusts its own record of the turn over the daemon's status.
 export const TURN_START_GRACE_MS = 60_000;
 
 function deliveredIds(timeline: readonly AgentTimelineItem[]): Set<string> {

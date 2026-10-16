@@ -354,7 +354,6 @@ function PromptHistoryContent({
   );
 }
 
-/** The components close over the store, so they need no context or global to reach it. */
 export function createPromptHistory(queues: QueueStore) {
   function PromptHistoryPopover(props: PluginButtonContentProps) {
     if (props.context !== "agent") {
