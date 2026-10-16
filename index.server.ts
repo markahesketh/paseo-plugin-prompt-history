@@ -37,11 +37,7 @@ export default function contribute(server: PluginServerContext) {
       await requirePaseo().agents.ref(agentId).send(text, { messageId });
     },
     async status(agentId) {
-      const result = await requirePaseo().agents.ref(agentId).refresh();
-      if (!result) {
-        throw new Error(`Agent ${agentId} was not found.`);
-      }
-      return daemonStatus(result.agent);
+      return daemonStatus(await requirePaseo().agents.ref(agentId).refresh());
     },
     newId,
     now: Date.now,

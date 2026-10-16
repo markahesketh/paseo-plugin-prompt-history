@@ -235,6 +235,27 @@ test("ignores the late end of an earlier turn once the next turn has started", a
   assert.deepEqual(sentTexts(), ["first", "second", "third"]);
 });
 
+test("the sweep forgets the queue of an agent the daemon no longer has", async () => {
+  const { daemon, queue, sentTexts } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  daemon.status = "gone";
+
+  daemon.time = TURN_START_GRACE_MS;
+  await queue.sweep();
+
+  assert.deepEqual(sentTexts(), ["first"]);
+  assert.deepEqual(queue.snapshot().queues, []);
+});
+
+test("refuses to send to an agent the daemon no longer has", async () => {
+  const { daemon, queue, sentTexts } = fakeDaemon();
+  daemon.status = "gone";
+
+  await assert.rejects(queue.send("agent", "first"));
+  assert.deepEqual(sentTexts(), []);
+});
+
 test("forgetting an archived agent drops its queue", async () => {
   const { queue } = fakeDaemon();
   await queue.send("agent", "first");
