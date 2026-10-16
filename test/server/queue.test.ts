@@ -287,6 +287,60 @@ test("forgetting an archived agent drops its queue", async () => {
   assert.deepEqual(queue.snapshot().queues, []);
 });
 
+test("removing a prompt behind the head keeps the rest in order", async () => {
+  const { daemon, queue, sentTexts, endTurn } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  await queue.send("agent", "third");
+  const third = queue.snapshot().queues[0]!.prompts[1]!;
+
+  await queue.remove("agent", third.id);
+  assert.deepEqual(queuedTexts(queue, "agent"), ["second"]);
+
+  await endTurn(daemon.sent[0]!);
+  assert.deepEqual(sentTexts(), ["first", "second"]);
+  assert.deepEqual(queue.snapshot().queues, []);
+});
+
+test("resuming while the daemon is busy clears the pause but sends nothing", async () => {
+  const { daemon, queue, sentTexts, endTurn } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  await endTurn(daemon.sent[0]!, canceled);
+  daemon.status = "busy";
+
+  await queue.resume("agent");
+  assert.deepEqual(sentTexts(), ["first"]);
+  assert.equal(queue.snapshot().queues[0]!.paused, null);
+
+  daemon.status = "idle";
+  await queue.sweep();
+  assert.deepEqual(sentTexts(), ["first", "second"]);
+});
+
+test("the sweep leaves a paused queue alone", async () => {
+  const { daemon, queue, sentTexts, endTurn } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  await endTurn(daemon.sent[0]!, canceled);
+  daemon.time = TURN_START_GRACE_MS;
+
+  await queue.sweep();
+
+  assert.deepEqual(sentTexts(), ["first"]);
+});
+
+test("a direct send the daemon rejects propagates and leaves nothing behind", async () => {
+  const { daemon, queue, sentTexts } = fakeDaemon();
+  daemon.failNextSend = true;
+
+  await assert.rejects(queue.send("agent", "first"), /daemon unavailable/);
+
+  assert.deepEqual(queue.snapshot().queues, []);
+  assert.equal(await queue.send("agent", "second"), "sent");
+  assert.deepEqual(sentTexts(), ["second"]);
+});
+
 test("overlapping sweeps send one prompt", async () => {
   const { daemon, queue, sentTexts } = fakeDaemon();
   await queue.send("agent", "first");
