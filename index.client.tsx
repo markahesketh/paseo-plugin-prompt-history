@@ -4,6 +4,7 @@ import type {
 } from "@getpaseo/plugin/client";
 import { PromptHistoryPanel, PromptHistoryPopover } from "./client/prompt-history";
 import { createQueueStore, installQueueStore } from "./client/queue";
+import { historyTitle, pillText } from "./client/labels";
 import { installPromptHistoryHotkey } from "./client/web";
 import { listQueuesRpc } from "./shared/queue";
 
@@ -27,7 +28,7 @@ export default function contribute(client: PluginClientContext) {
 
   const removeCommandCenterItem = client.addCommandCenterItem({
     id: "open-prompt-history",
-    title: "Search prompt history",
+    title: historyTitle,
     icon: "History",
     keywords: ["repeat", "reuse", "previous", "prompts"],
     context: "agent",
@@ -61,10 +62,6 @@ export default function contribute(client: PluginClientContext) {
   };
   const pollTimer = setInterval(refreshQueues, QUEUE_POLL_INTERVAL_MS);
 
-  function queuedLabel(count: number): string {
-    return count === 0 ? "History" : `History · ${count} queued`;
-  }
-
   const removePill = (agentId: string) => {
     pills.get(agentId)?.registration.remove();
     pills.delete(agentId);
@@ -77,13 +74,7 @@ export default function contribute(client: PluginClientContext) {
     }
 
     pill.queuedCount = queuedCount;
-    pill.registration.update({
-      label: queuedLabel(queuedCount),
-      title:
-        queuedCount === 0
-          ? "Search prompt history"
-          : `Search prompt history (${queuedCount} queued)`,
-    });
+    pill.registration.update(pillText(queuedCount));
   };
 
   const registerPill = (agent: {
@@ -109,12 +100,8 @@ export default function contribute(client: PluginClientContext) {
       workspaceId: agent.workspaceId,
       agentId: agent.id,
       button: {
-        title:
-          queuedCount === 0
-            ? "Search prompt history"
-            : `Search prompt history (${queuedCount} queued)`,
+        ...pillText(queuedCount),
         icon: "History",
-        label: queuedLabel(queuedCount),
         behavior: { kind: "popover", Content: PromptHistoryPopover },
       },
     });
