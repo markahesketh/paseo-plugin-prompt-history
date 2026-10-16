@@ -115,7 +115,9 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
       return "busy";
     }
     const status = await deps.status(agentId);
-    if (status === "idle") {
+    if (status === "gone") {
+      agents.delete(agentId);
+    } else if (status === "idle") {
       current.turn = null;
     }
     return status;
@@ -147,10 +149,11 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
       return exclusive(agentId, async () => {
         const current = state(agentId);
         try {
-          if (
-            current.prompts.length > 0 ||
-            (await availability(agentId, current)) === "busy"
-          ) {
+          const status = current.prompts.length > 0 ? "busy" : await availability(agentId, current);
+          if (status === "gone") {
+            throw new Error(`Agent ${agentId} is archived or no longer exists.`);
+          }
+          if (status === "busy") {
             current.prompts.push({
               id: deps.newId(),
               text,
@@ -215,7 +218,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
             if (!current || current.prompts.length === 0 || current.paused !== null) {
               return;
             }
-            if ((await availability(agentId, current)) === "busy") {
+            if ((await availability(agentId, current)) !== "idle") {
               return;
             }
             await sendNext(agentId, current);
