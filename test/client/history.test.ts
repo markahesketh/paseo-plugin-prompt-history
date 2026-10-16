@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { promptsFromTimeline } from "../../client/history.ts";
+import { promptsFromTimeline, type PromptEntry } from "../../client/history.ts";
 
 const agent = { id: "agent-1", title: "Review agent" };
 
-function userMessage(text: string, seqStart?: number) {
+function userMessage(text: string, seqStart: number): PromptEntry {
   return {
     item: { type: "user_message", text },
     timestamp: "2026-09-29T10:01:00.000Z",
-    ...(seqStart === undefined ? {} : { seqStart }),
+    seqStart,
   };
 }
 
@@ -28,14 +28,14 @@ test("only user messages become prompts", () => {
   );
 });
 
-test("entries without seqStart keep unique, age-ordered IDs across pages", () => {
-  const newerPage = promptsFromTimeline(agent, [userMessage("newer a"), userMessage("newer b")]);
-  const olderPage = promptsFromTimeline(agent, [userMessage("older a"), userMessage("older b")], 2);
-  const prompts = [...olderPage, ...newerPage];
+test("blank user messages are skipped", () => {
+  assert.deepEqual(promptsFromTimeline(agent, [userMessage("  \n ", 1)]), []);
+});
 
-  assert.equal(new Set(prompts.map(({ id }) => id)).size, 4);
-  assert.deepEqual(
-    [...prompts].sort((left, right) => left.sequence - right.sequence).map(({ text }) => text),
-    ["older a", "older b", "newer a", "newer b"],
-  );
+test("a prompt is labelled with the agent title and falls back to its id", () => {
+  const [titled] = promptsFromTimeline(agent, [userMessage("hello", 1)]);
+  const [untitled] = promptsFromTimeline({ id: "agent-2" }, [userMessage("hello", 1)]);
+
+  assert.equal(titled?.agentLabel, "Review agent");
+  assert.equal(untitled?.agentLabel, "agent-2");
 });

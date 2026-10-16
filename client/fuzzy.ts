@@ -1,11 +1,4 @@
-export type PromptRecord = {
-  id: string;
-  agentId: string;
-  agentLabel: string;
-  text: string;
-  sequence: number;
-  createdAt: string | null;
-};
+import type { PromptRecord } from "./history";
 
 export type RankedPrompt = PromptRecord & { score: number };
 

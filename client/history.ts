@@ -1,57 +1,37 @@
-import type { PromptRecord } from "./fuzzy";
+import type { usePaseo } from "@getpaseo/plugin/client";
 
-type RecordValue = Record<string, unknown>;
-
-export type TimelineEntry = {
-  item?: unknown;
-  timestamp: string;
-  seqStart?: number;
+export type PromptRecord = {
+  id: string;
+  agentId: string;
+  agentLabel: string;
+  text: string;
+  sequence: number;
+  createdAt: string | null;
 };
 
-function isRecord(value: unknown): value is RecordValue {
-  return typeof value === "object" && value !== null;
-}
+type Paseo = ReturnType<typeof usePaseo>;
+type TimelineEntry = Awaited<
+  ReturnType<ReturnType<Paseo["agents"]["ref"]>["timeline"]["refetch"]>
+>["entries"][number];
 
-function stringValue(record: RecordValue, key: string): string | null {
-  return typeof record[key] === "string" ? record[key] : null;
-}
+export type PromptEntry = Pick<TimelineEntry, "item" | "timestamp" | "seqStart">;
 
-export function promptText(item: unknown): string | null {
-  if (!isRecord(item) || item.type !== "user_message") {
-    return null;
-  }
-
-  const text = stringValue(item, "text");
-  return text && text.trim() ? text : null;
-}
-
-/**
- * Pages are read from newest to oldest. `newerEntryCount` is the number of
- * entries already read from newer pages. It gives entries without `seqStart`
- * a sequence that is unique for the agent and still orders them by age.
- */
 export function promptsFromTimeline(
   agent: { id: string; title?: string | null },
-  entries: readonly TimelineEntry[],
-  newerEntryCount = 0,
+  entries: readonly PromptEntry[],
 ): PromptRecord[] {
-  return entries.flatMap((entry, index) => {
-    const text = promptText(entry.item);
-    if (!text) {
-      return [];
-    }
-
-    const sequence = entry.seqStart ?? index - entries.length - newerEntryCount;
-    const id = entry.seqStart === undefined ? `${agent.id}:page:${sequence}` : `${agent.id}:${sequence}`;
-    return [
-      {
-        id,
-        agentId: agent.id,
-        agentLabel: agent.title ?? agent.id,
-        text,
-        sequence,
-        createdAt: entry.timestamp,
-      },
-    ];
-  });
+  return entries.flatMap(({ item, timestamp, seqStart }) =>
+    item.type === "user_message" && item.text.trim()
+      ? [
+          {
+            id: `${agent.id}:${seqStart}`,
+            agentId: agent.id,
+            agentLabel: agent.title ?? agent.id,
+            text: item.text,
+            sequence: seqStart,
+            createdAt: timestamp,
+          },
+        ]
+      : [],
+  );
 }

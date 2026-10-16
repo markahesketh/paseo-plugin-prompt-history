@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deduplicatePrompts, rankPrompts, type PromptRecord } from "../../client/fuzzy.ts";
+import { deduplicatePrompts, rankPrompts } from "../../client/fuzzy.ts";
+import type { PromptRecord } from "../../client/history.ts";
 
 const prompts: PromptRecord[] = [
   {
