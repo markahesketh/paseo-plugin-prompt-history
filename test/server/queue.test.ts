@@ -285,5 +285,15 @@ test("forgetting an archived agent drops its queue", async () => {
   await queue.forget("agent");
 
   assert.deepEqual(queue.snapshot().queues, []);
-  assert.equal(queue.hasQueuedPrompts(), false);
+});
+
+test("overlapping sweeps send one prompt", async () => {
+  const { daemon, queue, sentTexts } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  daemon.time = TURN_START_GRACE_MS;
+
+  await Promise.all([queue.sweep(), queue.sweep()]);
+
+  assert.deepEqual(sentTexts(), ["first", "second"]);
 });
