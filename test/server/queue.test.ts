@@ -203,6 +203,43 @@ test("the sweep sends a prompt after a missed turn end, but not too early", asyn
   assert.deepEqual(sentTexts(), ["first", "second"]);
 });
 
+test("ignores the late end of a turn the sweep already replaced", async () => {
+  const { daemon, queue, sentTexts, startTurn, endTurn } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  await queue.send("agent", "third");
+  await startTurn(daemon.sent[0]!);
+
+  // The first turn outlives the grace window and its end hook is slow, so the
+  // sweep sees an idle daemon and sends the second prompt first.
+  daemon.time = TURN_START_GRACE_MS;
+  await queue.sweep();
+  assert.deepEqual(sentTexts(), ["first", "second"]);
+
+  await endTurn(daemon.sent[0]!);
+  assert.deepEqual(sentTexts(), ["first", "second"]);
+
+  await endTurn(daemon.sent[1]!);
+  assert.deepEqual(sentTexts(), ["first", "second", "third"]);
+});
+
+test("ignores the late end of an earlier turn once the next turn has started", async () => {
+  const { daemon, queue, sentTexts, startTurn, endTurn } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  await queue.send("agent", "third");
+  await startTurn(daemon.sent[0]!);
+  daemon.time = TURN_START_GRACE_MS;
+  await queue.sweep();
+  await startTurn(daemon.sent[1]!);
+
+  await endTurn(daemon.sent[0]!);
+  assert.deepEqual(sentTexts(), ["first", "second"]);
+
+  await endTurn(daemon.sent[1]!);
+  assert.deepEqual(sentTexts(), ["first", "second", "third"]);
+});
+
 test("forgetting an archived agent drops its queue", async () => {
   const { queue } = fakeDaemon();
   await queue.send("agent", "first");
