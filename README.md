@@ -110,7 +110,11 @@ History is loaded when the panel or popover opens. It reads up to 20 pages of 10
 
 The send queue is on the daemon. Thus all apps connected to the daemon share it, and it continues when no app is connected. It is kept in memory, so a daemon restart or a plugin reload deletes it. A queued prompt is removed from the queue after the daemon accepts it.
 
-The queue sends the next prompt when Paseo reports that a turn ended. It does not wait for the agent status to change to idle, because the Paseo SDK says that change is not a reliable turn-end signal. Paseo delivers hook events on a best-effort basis, so the plugin also checks queues every 5 seconds. If it sees an idle agent with queued prompts, it sends the next one. After the plugin sends a prompt, this check waits 60 seconds before it trusts an idle status. Each queued prompt keeps the same message ID when it is sent again.
+The queue sends the next prompt when Paseo reports that a turn ended. It does not wait for the agent status to change to idle, because the Paseo SDK says that change is not a reliable turn-end signal. Paseo delivers hook events on a best-effort basis and not always in order, so the plugin also checks queues every 5 seconds. If it sees an idle agent with queued prompts, it sends the next one. After the plugin sends a prompt, this check waits 60 seconds before it trusts an idle status. The queue ignores a turn-end report for an earlier turn, so a late report cannot send a second prompt into a turn that has already started.
+
+A send can fail on the plugin side, for example on a timeout, after the daemon has accepted the prompt. The queue keeps the prompt and pauses. Each turn-end report lists the messages the daemon ran, by the queued prompt's ID. If the prompt is in that list, the queue drops it and continues. If not, `Send next` sends the prompt again with the same ID. The daemon does not reject a repeated ID, so a prompt that the daemon ran but did not report can run twice.
+
+When the daemon reports an agent as archived or missing, the queue drops that agent's prompts.
 
 The daemon cannot push queue changes to the app. The app reads the queue again after each agent update, and every 10 seconds.
 
