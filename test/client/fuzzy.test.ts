@@ -35,6 +35,13 @@ test("a query matches word starts in order", () => {
   assert.deepEqual(ids(rankPrompts(prompts, "rwd")), ["one"]);
 });
 
+test("a match on word starts outranks a match inside words", () => {
+  const midWord = { ...prompts[1]!, id: "mid", text: "sparrow bowed" };
+  const wordStarts = { ...prompts[0]!, id: "starts", text: "read what data" };
+
+  assert.deepEqual(ids(rankPrompts([midWord, wordStarts], "rwd")), ["starts", "mid"]);
+});
+
 test("deduplication keeps the newest copy of a prompt", () => {
   const repeated: PromptRecord[] = [
     { ...prompts[0]!, id: "old", sequence: 100, createdAt: "2026-09-29T09:00:00.000Z" },
