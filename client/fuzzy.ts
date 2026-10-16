@@ -75,7 +75,6 @@ function fuzzyScore(query: string, candidate: string): number | null {
   return queryIndex === needle.length ? 500 + score - haystack.length / 100 : null;
 }
 
-/** Expects prompts that `deduplicatePrompts` has already processed. */
 export function rankPrompts(
   prompts: readonly PromptRecord[],
   query: string,
