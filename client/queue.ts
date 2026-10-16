@@ -29,11 +29,8 @@ export type QueueStore = {
   dispose(): void;
 };
 
-/**
- * Mirrors the daemon-side queue and owns every call that reads or changes it.
- * Responses can arrive out of order, so only the newest request may replace
- * the snapshot.
- */
+// Responses can arrive out of order, so only the newest request may replace
+// the snapshot.
 export function createQueueStore(api: QueueApi): QueueStore {
   let queues = new Map<string, AgentQueue>();
   const listeners = new Set<() => void>();
