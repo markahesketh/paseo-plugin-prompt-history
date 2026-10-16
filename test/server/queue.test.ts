@@ -160,13 +160,23 @@ test("removing the last queued prompt clears the pause", async () => {
   assert.deepEqual(sentTexts(), ["first", "third"]);
 });
 
-test("a turn started elsewhere makes new prompts wait", async () => {
+test("a turn started with nothing queued does not block a later send", async () => {
   const { queue, sentTexts } = fakeDaemon();
 
+  // The daemon's turn_ended hook for this turn never arrives.
   await queue.turnStarted("agent", "turn-x");
 
-  assert.equal(await queue.send("agent", "later"), "queued");
-  assert.deepEqual(sentTexts(), []);
+  assert.equal(await queue.send("agent", "later"), "sent");
+  assert.deepEqual(sentTexts(), ["later"]);
+});
+
+test("a send past the grace window asks the daemon instead of trusting a stale turn", async () => {
+  const { daemon, queue, sentTexts } = fakeDaemon();
+  await queue.send("agent", "first");
+
+  daemon.time = TURN_START_GRACE_MS;
+  assert.equal(await queue.send("agent", "second"), "sent");
+  assert.deepEqual(sentTexts(), ["first", "second"]);
 });
 
 test("the sweep sends a prompt after a missed turn end, but not too early", async () => {
