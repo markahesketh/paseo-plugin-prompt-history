@@ -38,9 +38,13 @@ type Turn =
   | { phase: "sent"; messageId: string; since: number }
   | { phase: "running"; turnId: string | null; since: number };
 
+type Pause =
+  | { kind: "turn"; message: string }
+  | { kind: "send"; promptId: string; message: string };
+
 type AgentState = {
   prompts: QueuedPrompt[];
-  paused: string | null;
+  pause: Pause | null;
   turn: Turn | null;
 };
 
@@ -70,6 +74,22 @@ function endsTrackedTurn(turn: Turn | null, end: TurnEnd, delivered: Set<string>
   return turn.turnId === null || end.turnId === null || turn.turnId === end.turnId;
 }
 
+function turnPause(outcome: Exclude<PluginTurnOutcome, { kind: "completed" }>): Pause {
+  const message =
+    outcome.kind === "canceled"
+      ? `Paused because the turn was stopped: ${outcome.reason}`
+      : `Paused because the turn failed: ${outcome.error.message}`;
+  return { kind: "turn", message };
+}
+
+function drop(current: AgentState, ids: Set<string>): void {
+  current.prompts = current.prompts.filter(({ id }) => !ids.has(id));
+  const failedSendDropped = current.pause?.kind === "send" && ids.has(current.pause.promptId);
+  if (current.prompts.length === 0 || failedSendDropped) {
+    current.pause = null;
+  }
+}
+
 export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
   const agents = new Map<string, AgentState>();
   const locks = new Map<string, Promise<void>>();
@@ -77,7 +97,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
   function state(agentId: string): AgentState {
     let current = agents.get(agentId);
     if (!current) {
-      current = { prompts: [], paused: null, turn: null };
+      current = { prompts: [], pause: null, turn: null };
       agents.set(agentId, current);
     }
     return current;
@@ -125,7 +145,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
 
   async function sendNext(agentId: string, current: AgentState): Promise<void> {
     const next = current.prompts[0];
-    if (!next || current.paused !== null) {
+    if (!next || current.pause !== null) {
       return;
     }
 
@@ -133,15 +153,16 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
       await deps.send(agentId, next.text, next.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      current.paused = `Could not send the next prompt: ${message}`;
+      current.pause = {
+        kind: "send",
+        promptId: next.id,
+        message: `Could not send the next prompt: ${message}`,
+      };
       return;
     }
 
     current.prompts.shift();
     current.turn = { phase: "sent", messageId: next.id, since: deps.now() };
-    if (current.prompts.length === 0) {
-      current.paused = null;
-    }
   }
 
   return {
@@ -188,18 +209,16 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
           return;
         }
 
-        if (!endsTrackedTurn(current.turn, end, deliveredIds(end.timeline))) {
-          return;
-        }
-
-        current.turn = null;
-        if (current.prompts.length > 0 && current.paused === null) {
-          if (end.outcome.kind === "canceled") {
-            current.paused = "Paused because the turn was stopped.";
-          } else if (end.outcome.kind === "failed") {
-            current.paused = "Paused because the turn failed.";
-          } else {
-            await sendNext(agentId, current);
+        const delivered = deliveredIds(end.timeline);
+        drop(current, delivered);
+        if (endsTrackedTurn(current.turn, end, delivered)) {
+          current.turn = null;
+          if (current.prompts.length > 0 && current.pause === null) {
+            if (end.outcome.kind === "completed") {
+              await sendNext(agentId, current);
+            } else {
+              current.pause = turnPause(end.outcome);
+            }
           }
         }
         prune(agentId);
@@ -208,14 +227,14 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
 
     async sweep() {
       const candidates = [...agents.entries()]
-        .filter(([, current]) => current.prompts.length > 0 && current.paused === null)
+        .filter(([, current]) => current.prompts.length > 0 && current.pause === null)
         .map(([agentId]) => agentId);
 
       await Promise.allSettled(
         candidates.map((agentId) =>
           exclusive(agentId, async () => {
             const current = agents.get(agentId);
-            if (!current || current.prompts.length === 0 || current.paused !== null) {
+            if (!current || current.prompts.length === 0 || current.pause !== null) {
               return;
             }
             if ((await availability(agentId, current)) !== "idle") {
@@ -234,10 +253,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
           return;
         }
 
-        current.prompts = current.prompts.filter(({ id }) => id !== promptId);
-        if (current.prompts.length === 0) {
-          current.paused = null;
-        }
+        drop(current, new Set([promptId]));
         prune(agentId);
       });
     },
@@ -249,7 +265,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
           return;
         }
 
-        current.paused = null;
+        current.pause = null;
         if ((await availability(agentId, current)) === "idle") {
           await sendNext(agentId, current);
         }
@@ -273,7 +289,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
         if (current.prompts.length > 0) {
           queues.push({
             agentId,
-            paused: current.paused,
+            paused: current.pause?.message ?? null,
             prompts: current.prompts.map((prompt) => ({ ...prompt })),
           });
         }
