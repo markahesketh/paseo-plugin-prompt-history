@@ -248,39 +248,32 @@ function PromptHistoryContent({
 
   // History covers every agent, so it does not depend on the selected agent.
   useEffect(() => {
-    let active = true;
     const controller = new AbortController();
-    const signal = { cancelled: false, abortSignal: controller.signal };
+    const { signal } = controller;
     setLoading(true);
     setError(null);
     setPrompts([]);
     void loadPromptHistory(paseo, signal, (batch) => {
-      if (active) {
-        setPrompts((current) => {
-          const byId = new Map(current.map((prompt) => [prompt.id, prompt]));
-          for (const prompt of batch) {
-            byId.set(prompt.id, prompt);
-          }
-          return [...byId.values()];
-        });
-      }
+      setPrompts((current) => {
+        const byId = new Map(current.map((prompt) => [prompt.id, prompt]));
+        for (const prompt of batch) {
+          byId.set(prompt.id, prompt);
+        }
+        return [...byId.values()];
+      });
     })
       .catch((loadError: unknown) => {
-        if (active) {
+        if (!signal.aborted) {
           setError(errorMessage(loadError, "Could not load prompt history."));
         }
       })
       .finally(() => {
-        if (active) {
+        if (!signal.aborted) {
           setLoading(false);
         }
       });
 
-    return () => {
-      active = false;
-      signal.cancelled = true;
-      controller.abort();
-    };
+    return () => controller.abort();
   }, [paseo]);
 
   useEffect(() => {

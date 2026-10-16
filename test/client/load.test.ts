@@ -73,21 +73,9 @@ function singleAgent(id: string, updatedAt: string, pages: Record<string, Timeli
   });
 }
 
-function start() {
-  const controller = new AbortController();
-  const signal = { cancelled: false, abortSignal: controller.signal };
-  return {
-    signal,
-    abort() {
-      signal.cancelled = true;
-      controller.abort();
-    },
-  };
-}
-
-async function load(paseo: Paseo, session = start()): Promise<PromptRecord[][]> {
+async function load(paseo: Paseo, controller = new AbortController()): Promise<PromptRecord[][]> {
   const batches: PromptRecord[][] = [];
-  await loadPromptHistory(paseo, session.signal, (batch) => batches.push(batch));
+  await loadPromptHistory(paseo, controller.signal, (batch) => batches.push(batch));
   return batches;
 }
 
@@ -189,10 +177,10 @@ test("directory pagination follows cursors and stops on a repeated one", async (
 
 test("aborting before the load starts reads nothing", async () => {
   const { paseo, directoryCursors } = singleAgent("never", "u1", {});
-  const session = start();
-  session.abort();
+  const controller = new AbortController();
+  controller.abort();
 
-  assert.deepEqual(await load(paseo, session), []);
+  assert.deepEqual(await load(paseo, controller), []);
   assert.deepEqual(directoryCursors, []);
 });
 
@@ -202,12 +190,12 @@ test("aborting during the load stops delivering batches and reading agents", asy
     directory: { "": { agents: ids.map((id) => ({ id, updatedAt: "u1" })) } },
     timelines: Object.fromEntries(ids.map((id) => [id, { "": { entries: [prompt(id, 1)] } }])),
   });
-  const session = start();
+  const controller = new AbortController();
   const batches: PromptRecord[][] = [];
 
-  await loadPromptHistory(paseo, session.signal, (batch) => {
+  await loadPromptHistory(paseo, controller.signal, (batch) => {
     batches.push(batch);
-    session.abort();
+    controller.abort();
   });
 
   assert.equal(batches.length, 1);
