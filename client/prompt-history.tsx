@@ -2,7 +2,7 @@ import type {
   PluginAgentPanelProps,
   PluginButtonContentProps,
 } from "@getpaseo/plugin/client";
-import { usePaseo, useRpc } from "@getpaseo/plugin/client";
+import { usePaseo } from "@getpaseo/plugin/client";
 import {
   FlatList,
   Icon,
@@ -12,22 +12,16 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { FlatList as NativeFlatList } from "react-native";
-import {
-  removeQueuedPromptRpc,
-  resumeQueueRpc,
-  sendPromptRpc,
-  type AgentQueue,
-  type QueueSnapshot,
-} from "../shared/queue";
+import { errorMessage, formatPrompt } from "./format";
 import { deduplicatePrompts, rankPrompts, type RankedPrompt } from "./fuzzy";
 import type { PromptRecord } from "./history";
 import { searchLabel } from "./labels";
 import { loadPromptHistory } from "./load";
-import { queueStore } from "./queue";
+import type { QueueStore } from "./queue";
+import { QueuedPrompts, useAgentBusy } from "./queued-prompts";
 import { moveSelection, selectedIndex } from "./selection";
 
 const HOST_FOCUS_SETTLE_DELAY_MS = 200;
-const QUEUE_PREVIEW_COUNT = 3;
 
 type Theme = PluginButtonContentProps["theme"];
 type Layout = PluginButtonContentProps["layout"];
@@ -42,129 +36,21 @@ type KeyPress = {
   preventDefault?: () => void;
 };
 
-function formatPrompt(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
-
-function useAgentQueue(agentId: string): AgentQueue | null {
-  const [queue, setQueue] = useState(() => queueStore()?.get(agentId) ?? null);
-
-  useEffect(() => {
-    const store = queueStore();
-    setQueue(store?.get(agentId) ?? null);
-    return store?.subscribe(() => setQueue(store.get(agentId)));
-  }, [agentId]);
-
-  return queue;
-}
-
-function QueuedPrompts({
-  theme,
-  queue,
-  onChanged,
-}: {
-  theme: Theme;
-  queue: AgentQueue;
-  onChanged: (snapshot: QueueSnapshot) => void;
-}) {
-  const toast = useToast();
-  const removeQueuedPrompt = useRpc(removeQueuedPromptRpc);
-  const resumeQueue = useRpc(resumeQueueRpc);
-  const [busy, setBusy] = useState(false);
-
-  async function run(action: () => Promise<QueueSnapshot>, failure: string) {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    try {
-      onChanged(await action());
-    } catch (error: unknown) {
-      toast.error(errorMessage(error, failure));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const styles = {
-    box: {
-      padding: 10,
-      borderRadius: 7,
-      borderWidth: 1,
-      borderColor: theme.colors.accent,
-      backgroundColor: theme.colors.surface2,
-      gap: 6,
-    },
-    title: { color: theme.colors.accent, fontSize: 12, fontWeight: "600" as const },
-    paused: { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 16 },
-    row: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8 },
-    text: { flex: 1, color: theme.colors.foreground, fontSize: 12, lineHeight: 16 },
-    action: { color: theme.colors.accent, fontSize: 12, fontWeight: "600" as const },
-  };
-
-  return (
-    <View style={styles.box}>
-      <Text style={styles.title}>Queued for this agent · {queue.prompts.length}</Text>
-      {queue.paused ? (
-        <View style={styles.row}>
-          <Text style={styles.paused}>{queue.paused}</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Send the next queued prompt"
-            disabled={busy}
-            onPress={() =>
-              void run(() => resumeQueue({ agentId: queue.agentId }), "Could not resume the queue.")
-            }
-          >
-            <Text style={styles.action}>Send next</Text>
-          </Pressable>
-        </View>
-      ) : null}
-      {queue.prompts.slice(0, QUEUE_PREVIEW_COUNT).map((prompt) => (
-        <View key={prompt.id} style={styles.row}>
-          <Text numberOfLines={2} style={styles.text}>
-            {formatPrompt(prompt.text)}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Remove queued prompt: ${formatPrompt(prompt.text)}`}
-            disabled={busy}
-            onPress={() =>
-              void run(
-                () => removeQueuedPrompt({ agentId: queue.agentId, promptId: prompt.id }),
-                "Could not remove the queued prompt.",
-              )
-            }
-          >
-            <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
-          </Pressable>
-        </View>
-      ))}
-      {queue.prompts.length > QUEUE_PREVIEW_COUNT ? (
-        <Text style={styles.text}>+{queue.prompts.length - QUEUE_PREVIEW_COUNT} more</Text>
-      ) : null}
-    </View>
-  );
-}
-
 function PromptHistoryContent({
   theme,
   layout,
+  queues,
   agentId,
   onClose,
 }: {
   theme: Theme;
   layout: Layout;
+  queues: QueueStore;
   agentId: string;
   onClose: () => void;
 }) {
   const paseo = usePaseo();
   const toast = useToast();
-  const sendPromptToQueue = useRpc(sendPromptRpc);
   const searchRef = useRef<React.ElementRef<typeof TextInput>>(null);
   const editorRef = useRef<React.ElementRef<typeof TextInput>>(null);
   const resultsRef = useRef<NativeFlatList<RankedPrompt>>(null);
@@ -174,9 +60,7 @@ function PromptHistoryContent({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const queue = useAgentQueue(agentId);
-  const sendingRef = useRef(false);
+  const busy = useAgentBusy(queues, agentId);
   const [error, setError] = useState<string | null>(null);
   const matches = useMemo(() => rankPrompts(prompts, query), [prompts, query]);
   const safeSelectedIndex = selectedIndex(matches, selectedId);
@@ -300,28 +184,22 @@ function PromptHistoryContent({
   }, [ownScroller, matches.length, safeSelectedIndex]);
 
   async function send(text: string): Promise<void> {
-    if (!text.trim() || sendingRef.current) {
+    if (!text.trim()) {
       return;
     }
 
-    sendingRef.current = true;
-    setSending(true);
     try {
-      const { result, snapshot } = await sendPromptToQueue({ agentId, text });
-      queueStore()?.apply(snapshot);
+      const result = await queues.send(agentId, text);
       if (result === "queued") {
         toast.show("Prompt queued. It will send when the agent finishes its turn.", {
           variant: "success",
         });
-      } else {
+      } else if (result === "sent") {
         toast.show("Prompt sent", { variant: "success" });
         onClose();
       }
     } catch (sendError: unknown) {
       toast.error(errorMessage(sendError, "Could not send prompt."));
-    } finally {
-      sendingRef.current = false;
-      setSending(false);
     }
   }
 
@@ -418,9 +296,7 @@ function PromptHistoryContent({
             : "↑↓ choose · Enter send · Tab edit here · Cmd/Ctrl+Enter send"}
       </Text>
 
-      {queue ? (
-        <QueuedPrompts theme={theme} queue={queue} onChanged={(next) => queueStore()?.apply(next)} />
-      ) : null}
+      <QueuedPrompts theme={theme} queues={queues} agentId={agentId} />
 
       {loading ? <Text style={styles.empty}>Loading prompt history…</Text> : null}
       {error ? <Text style={styles.empty}>{error}</Text> : null}
@@ -466,11 +342,11 @@ function PromptHistoryContent({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Send edited prompt"
-            disabled={sending || !draft.trim()}
+            disabled={busy || !draft.trim()}
             onPress={() => void send(draft)}
             style={styles.send}
           >
-            <Text style={styles.sendText}>{sending ? "Sending…" : "Send"}</Text>
+            <Text style={styles.sendText}>{busy ? "Sending…" : "Send"}</Text>
           </Pressable>
         </View>
       ) : null}
@@ -478,25 +354,35 @@ function PromptHistoryContent({
   );
 }
 
-export function PromptHistoryPopover(props: PluginButtonContentProps) {
-  if (props.context !== "agent") {
-    return null;
+/** The components close over the store, so they need no context or global to reach it. */
+export function createPromptHistory(queues: QueueStore) {
+  function PromptHistoryPopover(props: PluginButtonContentProps) {
+    if (props.context !== "agent") {
+      return null;
+    }
+
+    return (
+      <PromptHistoryContent
+        theme={props.theme}
+        layout={props.layout}
+        queues={queues}
+        agentId={props.agentId}
+        onClose={props.close}
+      />
+    );
   }
 
-  return (
-    <PromptHistoryContent
-      theme={props.theme}
-      layout={props.layout}
-      agentId={props.agentId}
-      onClose={props.close}
-    />
-  );
-}
+  function PromptHistoryPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
+    return (
+      <PromptHistoryContent
+        theme={theme}
+        layout={layout}
+        queues={queues}
+        agentId={agentId}
+        onClose={() => {}}
+      />
+    );
+  }
 
-export function PromptHistoryPanel({
-  theme,
-  layout,
-  agentId,
-}: PluginAgentPanelProps) {
-  return <PromptHistoryContent theme={theme} layout={layout} agentId={agentId} onClose={() => {}} />;
+  return { PromptHistoryPopover, PromptHistoryPanel };
 }
