@@ -32,16 +32,42 @@ export type PromptQueue = {
   snapshot(): QueueSnapshot;
 };
 
+/** The turn this queue believes is running, from its own send or a turn event. */
+type Turn =
+  | { phase: "sent"; messageId: string; since: number }
+  | { phase: "running"; turnId: string | null; since: number };
+
 type AgentState = {
   prompts: QueuedPrompt[];
   paused: string | null;
-  /** Set while a turn is known to run, from a turn event or our own send. */
-  turnSince: number | null;
+  turn: Turn | null;
 };
 
 // A sent prompt can take a moment to show as running. Until this time passes,
 // the sweep trusts our own record of the turn over the daemon's status.
 export const TURN_START_GRACE_MS = 60_000;
+
+function deliveredIds(timeline: readonly AgentTimelineItem[]): Set<string> {
+  const ids = new Set<string>();
+  for (const item of timeline) {
+    if (item.type === "user_message" && item.clientMessageId) {
+      ids.add(item.clientMessageId);
+    }
+  }
+  return ids;
+}
+
+// Hooks arrive late and out of order, so an end event may belong to a turn
+// this queue has already moved past.
+function endsTrackedTurn(turn: Turn | null, end: TurnEnd, delivered: Set<string>): boolean {
+  if (turn === null) {
+    return true;
+  }
+  if (turn.phase === "sent") {
+    return delivered.has(turn.messageId);
+  }
+  return turn.turnId === null || end.turnId === null || turn.turnId === end.turnId;
+}
 
 export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
   const agents = new Map<string, AgentState>();
@@ -50,7 +76,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
   function state(agentId: string): AgentState {
     let current = agents.get(agentId);
     if (!current) {
-      current = { prompts: [], paused: null, turnSince: null };
+      current = { prompts: [], paused: null, turn: null };
       agents.set(agentId, current);
     }
     return current;
@@ -58,7 +84,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
 
   function prune(agentId: string): void {
     const current = agents.get(agentId);
-    if (current && current.prompts.length === 0 && current.turnSince === null) {
+    if (current && current.prompts.length === 0 && current.turn === null) {
       agents.delete(agentId);
     }
   }
@@ -81,6 +107,10 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
     return result;
   }
 
+  function withinGrace(turn: Turn | null): boolean {
+    return turn !== null && deps.now() - turn.since < TURN_START_GRACE_MS;
+  }
+
   async function sendNext(agentId: string, current: AgentState): Promise<void> {
     const next = current.prompts[0];
     if (!next || current.paused !== null) {
@@ -96,7 +126,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
     }
 
     current.prompts.shift();
-    current.turnSince = deps.now();
+    current.turn = { phase: "sent", messageId: next.id, since: deps.now() };
     if (current.prompts.length === 0) {
       current.paused = null;
     }
@@ -109,7 +139,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
         try {
           if (
             current.prompts.length > 0 ||
-            current.turnSince !== null ||
+            current.turn !== null ||
             (await deps.status(agentId)) === "busy"
           ) {
             current.prompts.push({
@@ -120,8 +150,9 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
             return "queued";
           }
 
-          await deps.send(agentId, text, deps.newId());
-          current.turnSince = deps.now();
+          const messageId = deps.newId();
+          await deps.send(agentId, text, messageId);
+          current.turn = { phase: "sent", messageId, since: deps.now() };
           return "sent";
         } finally {
           prune(agentId);
@@ -129,24 +160,28 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
       });
     },
 
-    turnStarted(agentId) {
+    turnStarted(agentId, turnId) {
       return exclusive(agentId, async () => {
-        state(agentId).turnSince = deps.now();
+        state(agentId).turn = { phase: "running", turnId, since: deps.now() };
       });
     },
 
-    turnEnded(agentId, { outcome }) {
+    turnEnded(agentId, end) {
       return exclusive(agentId, async () => {
         const current = agents.get(agentId);
         if (!current) {
           return;
         }
 
-        current.turnSince = null;
+        if (!endsTrackedTurn(current.turn, end, deliveredIds(end.timeline))) {
+          return;
+        }
+
+        current.turn = null;
         if (current.prompts.length > 0 && current.paused === null) {
-          if (outcome.kind === "canceled") {
+          if (end.outcome.kind === "canceled") {
             current.paused = "Paused because the turn was stopped.";
-          } else if (outcome.kind === "failed") {
+          } else if (end.outcome.kind === "failed") {
             current.paused = "Paused because the turn failed.";
           } else {
             await sendNext(agentId, current);
@@ -168,17 +203,14 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
             if (!current || current.prompts.length === 0 || current.paused !== null) {
               return;
             }
-            if (
-              current.turnSince !== null &&
-              deps.now() - current.turnSince < TURN_START_GRACE_MS
-            ) {
+            if (withinGrace(current.turn)) {
               return;
             }
             if ((await deps.status(agentId)) === "busy") {
               return;
             }
 
-            current.turnSince = null;
+            current.turn = null;
             await sendNext(agentId, current);
           }),
         ),
@@ -208,7 +240,7 @@ export function createPromptQueue(deps: PromptQueueDeps): PromptQueue {
         }
 
         current.paused = null;
-        if (current.turnSince === null && (await deps.status(agentId)) === "idle") {
+        if (current.turn === null && (await deps.status(agentId)) === "idle") {
           await sendNext(agentId, current);
         }
         prune(agentId);
