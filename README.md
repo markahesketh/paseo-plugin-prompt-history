@@ -93,7 +93,7 @@ npm run typecheck
 npm test
 ```
 
-The tests are in `test/`. They cover prompt extraction, fuzzy ranking, result selection, the `Ctrl+R` match and target choice, the client queue mirror, and the daemon queue. The daemon queue tests use a fake daemon. Component key handling has no tests. Development needs Node.js 22.6 or later.
+The tests are in `test/`. They cover prompt extraction, history loading, fuzzy ranking, result selection, the `Ctrl+R` match and target choice, the client queue store, the daemon status mapping, and the daemon queue. The history loader and daemon queue tests use a fake Paseo API. Component key handling has no tests. Development needs Node.js 22.6 or later.
 
 ## Design notes
 
@@ -121,18 +121,23 @@ The daemon cannot push queue changes to the app. The app reads the queue again a
 ## Project structure
 
 ```text
-index.client.tsx           Paseo client contribution and composer controls
-index.server.ts            Daemon hooks, queue RPCs, and the fallback check
-client/prompt-history.tsx  Search, results, editor, and queue UI
-client/history.ts          Timeline parsing helpers
-client/fuzzy.ts            Prompt normalisation, deduplication, and ranking
-client/selection.ts        Result selection that follows the prompt
-client/queue.ts            Client mirror of the daemon queue
-client/element.ts          Ctrl+R target choice
-client/web.ts              Web-only Ctrl+R integration
-server/queue.ts            Daemon queue logic
-shared/queue.ts            Queue RPC contracts
-test/                      Node test runner tests
+index.client.tsx              Paseo client contribution and composer controls
+index.server.ts               Daemon hooks, queue RPCs, and the fallback check
+client/prompt-history.tsx     Search, results, and editor
+client/queued-prompts.tsx     Queue preview and controls
+client/load.ts                Paginated history loading and caching
+client/history.ts             Timeline parsing helpers
+client/fuzzy.ts               Prompt normalisation, deduplication, and ranking
+client/selection.ts           Result selection that follows the prompt
+client/queue.ts               Client store for the daemon queue
+client/labels.ts              Pill and search labels the Ctrl+R lookup matches
+client/format.ts              Text formatting helpers
+client/element.ts             Ctrl+R target choice
+client/web.ts                 Web-only Ctrl+R integration
+server/queue.ts               Daemon queue logic
+server/daemon-status.ts       Maps an agent's daemon state to the queue's view
+shared/queue.ts               Queue RPC contracts
+test/                         Node test runner tests
 ```
 
 ## License
