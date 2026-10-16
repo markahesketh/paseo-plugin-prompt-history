@@ -2,7 +2,8 @@ import type { PluginTurnOutcome } from "@getpaseo/plugin/server";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { AgentQueue, QueuedPrompt, QueueSnapshot } from "../shared/queue";
 
-export type DaemonStatus = "busy" | "idle";
+/** "gone" is an agent the daemon has archived or no longer has. */
+export type DaemonStatus = "busy" | "idle" | "gone";
 
 export type TurnEnd = {
   turnId: string | null;
