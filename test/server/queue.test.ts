@@ -116,8 +116,29 @@ test("pauses instead of sending when a turn is stopped or fails", async () => {
     await endTurn(daemon.sent[0]!, outcome);
 
     assert.deepEqual(sentTexts(), ["first"]);
-    assert.notEqual(queue.snapshot().queues[0]!.paused, null);
+    const reason = outcome.kind === "canceled" ? /user stopped it/ : /provider crashed/;
+    assert.match(queue.snapshot().queues[0]!.paused ?? "", reason);
   }
+});
+
+test("drops a prompt the daemon ran despite a failed send, then continues", async () => {
+  const { daemon, queue, sentTexts, endTurn } = fakeDaemon();
+  await queue.send("agent", "first");
+  await queue.send("agent", "second");
+  await queue.send("agent", "third");
+  daemon.failNextSend = true;
+  await endTurn(daemon.sent[0]!);
+  const [second] = queue.snapshot().queues[0]!.prompts;
+
+  // The send timed out on our side, but the daemon ran "second" and reports its turn.
+  await queue.turnEnded("agent", {
+    turnId: "turn-x",
+    outcome: completed,
+    timeline: [{ type: "user_message", text: "second", clientMessageId: second!.id }],
+  });
+
+  assert.deepEqual(sentTexts(), ["first", "third"]);
+  assert.deepEqual(queue.snapshot().queues, []);
 });
 
 test("keeps a prompt that fails to send, pauses, and sends it on resume", async () => {
