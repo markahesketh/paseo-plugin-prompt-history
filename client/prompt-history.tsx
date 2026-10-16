@@ -19,8 +19,8 @@ import {
   type AgentQueue,
   type QueueSnapshot,
 } from "../shared/queue";
-import { deduplicatePrompts, rankPrompts, type PromptRecord, type RankedPrompt } from "./fuzzy";
-import { promptsFromTimeline } from "./history";
+import { deduplicatePrompts, rankPrompts, type RankedPrompt } from "./fuzzy";
+import { promptsFromTimeline, type PromptRecord } from "./history";
 import { searchLabel } from "./labels";
 import { queueStore } from "./queue";
 import { moveSelection, selectedIndex } from "./selection";
@@ -66,7 +66,6 @@ async function loadAgentPrompts(
   const timeline = paseo.agents.ref(agent.id).timeline;
   const prompts: PromptRecord[] = [];
   let cursor: TimelineCursor | undefined;
-  let entriesRead = 0;
   let complete = true;
 
   for (let pageNumber = 0; pageNumber < MAX_PAGES_PER_AGENT; pageNumber += 1) {
@@ -91,8 +90,7 @@ async function loadAgentPrompts(
       break;
     }
 
-    prompts.push(...promptsFromTimeline(agent, page.entries, entriesRead));
-    entriesRead += page.entries.length;
+    prompts.push(...promptsFromTimeline(agent, page.entries));
 
     if (!page.hasOlder || page.startCursor === null || page.startCursor === undefined) {
       break;
