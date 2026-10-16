@@ -1,4 +1,5 @@
 import type { PluginHookContext, PluginServerContext } from "@getpaseo/plugin/server";
+import { daemonStatus } from "./server/daemon-status";
 import { createPromptQueue } from "./server/queue";
 import {
   listQueuesRpc,
@@ -35,13 +36,12 @@ export default function contribute(server: PluginServerContext) {
     async send(agentId, text, messageId) {
       await requirePaseo().agents.ref(agentId).send(text, { messageId });
     },
-    async isBusy(agentId) {
+    async status(agentId) {
       const result = await requirePaseo().agents.ref(agentId).refresh();
       if (!result) {
         throw new Error(`Agent ${agentId} was not found.`);
       }
-      const { status, activeTurn } = result.agent;
-      return status === "running" || status === "initializing" || activeTurn != null;
+      return daemonStatus(result.agent);
     },
     newId,
     now: Date.now,
@@ -49,11 +49,11 @@ export default function contribute(server: PluginServerContext) {
 
   const removeTurnStarted = server.on("agent.turn_started", async (event, context) => {
     remember(context.paseo);
-    await queue.turnStarted(event.agent.id);
+    await queue.turnStarted(event.agent.id, event.turnId);
   });
   const removeTurnEnded = server.on("agent.turn_ended", async (event, context) => {
     remember(context.paseo);
-    await queue.turnEnded(event.agent.id, event.outcome);
+    await queue.turnEnded(event.agent.id, event);
   });
   const removeArchived = server.on("agent.archived", async (event, context) => {
     remember(context.paseo);
