@@ -29,7 +29,6 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** Every call waits for the test to settle it, so responses can arrive in any order. */
 function controlledApi() {
   const calls = {
     list: [] as ReturnType<typeof deferred<QueueSnapshot>>[],
@@ -87,14 +86,14 @@ test("a second mutation for the same agent is ignored while one is in flight", a
 
   const removing = store.remove("agent", "prompt-0");
   const resuming = store.resume("agent");
-  const busyWhileInFlight = store.busy("agent");
+  const pendingWhileInFlight = store.pending("agent");
   calls.remove[0]!.resolve(snapshotWith(1));
   await Promise.all([removing, resuming]);
 
-  assert.equal(busyWhileInFlight, true);
+  assert.equal(pendingWhileInFlight, true);
   assert.equal(calls.remove.length, 1);
   assert.equal(calls.resume.length, 0);
-  assert.equal(store.busy("agent"), false);
+  assert.equal(store.pending("agent"), false);
   assert.equal(store.get("agent")?.prompts.length, 1);
 });
 
@@ -105,7 +104,7 @@ test("a failed mutation rejects, leaves the queue alone, and frees the agent", a
   calls.remove[0]!.reject(new Error("daemon offline"));
 
   await assert.rejects(removing, /daemon offline/);
-  assert.equal(store.busy("agent"), false);
+  assert.equal(store.pending("agent"), false);
   assert.equal(store.get("agent"), null);
 });
 

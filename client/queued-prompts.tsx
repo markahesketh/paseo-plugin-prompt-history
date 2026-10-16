@@ -11,8 +11,8 @@ export function useAgentQueue(queues: QueueStore, agentId: string) {
   return useSyncExternalStore(queues.subscribe, () => queues.get(agentId));
 }
 
-export function useAgentBusy(queues: QueueStore, agentId: string): boolean {
-  return useSyncExternalStore(queues.subscribe, () => queues.busy(agentId));
+export function useAgentPending(queues: QueueStore, agentId: string): boolean {
+  return useSyncExternalStore(queues.subscribe, () => queues.pending(agentId));
 }
 
 export function QueuedPrompts({
@@ -26,7 +26,7 @@ export function QueuedPrompts({
 }) {
   const toast = useToast();
   const queue = useAgentQueue(queues, agentId);
-  const busy = useAgentBusy(queues, agentId);
+  const pending = useAgentPending(queues, agentId);
 
   if (!queue) {
     return null;
@@ -65,7 +65,7 @@ export function QueuedPrompts({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Send the next queued prompt"
-            disabled={busy}
+            disabled={pending}
             onPress={() => void run(() => queues.resume(agentId), "Could not resume the queue.")}
           >
             <Text style={styles.action}>Send next</Text>
@@ -80,7 +80,7 @@ export function QueuedPrompts({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Remove queued prompt: ${formatPrompt(prompt.text)}`}
-            disabled={busy}
+            disabled={pending}
             onPress={() =>
               void run(
                 () => queues.remove(agentId, prompt.id),

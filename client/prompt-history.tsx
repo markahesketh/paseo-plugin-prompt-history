@@ -18,7 +18,7 @@ import type { PromptRecord } from "./history";
 import { searchLabel } from "./labels";
 import { loadPromptHistory } from "./load";
 import type { QueueStore } from "./queue";
-import { QueuedPrompts, useAgentBusy } from "./queued-prompts";
+import { QueuedPrompts, useAgentPending } from "./queued-prompts";
 import { moveSelection, selectedIndex } from "./selection";
 
 const HOST_FOCUS_SETTLE_DELAY_MS = 200;
@@ -60,7 +60,7 @@ function PromptHistoryContent({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
-  const busy = useAgentBusy(queues, agentId);
+  const pending = useAgentPending(queues, agentId);
   const [error, setError] = useState<string | null>(null);
   const matches = useMemo(() => rankPrompts(prompts, query), [prompts, query]);
   const safeSelectedIndex = selectedIndex(matches, selectedId);
@@ -342,11 +342,11 @@ function PromptHistoryContent({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Send edited prompt"
-            disabled={busy || !draft.trim()}
+            disabled={pending || !draft.trim()}
             onPress={() => void send(draft)}
             style={styles.send}
           >
-            <Text style={styles.sendText}>{busy ? "Sending…" : "Send"}</Text>
+            <Text style={styles.sendText}>{pending ? "Sending…" : "Send"}</Text>
           </Pressable>
         </View>
       ) : null}

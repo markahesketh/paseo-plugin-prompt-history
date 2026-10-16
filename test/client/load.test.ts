@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import type { PromptEntry, PromptRecord } from "../../client/history.ts";
 import { loadPromptHistory, type Paseo } from "../../client/load.ts";
 
+const FIRST_PAGE = "";
+
 type DirectoryPage = {
   agents: { id: string; updatedAt: string }[];
   nextCursor?: string;
@@ -13,7 +15,6 @@ type TimelinePage = {
   error?: string;
 };
 
-/** Scripted pages keyed by the cursor the loader sends; "" is the first page. */
 function fakePaseo(script: {
   directory: Record<string, DirectoryPage | Error>;
   timelines: Record<string, Record<string, TimelinePage>>;
@@ -24,7 +25,7 @@ function fakePaseo(script: {
   const paseo = {
     agents: {
       async list(options: { page: { cursor?: string } }) {
-        const cursor = options.page.cursor ?? "";
+        const cursor = options.page.cursor ?? FIRST_PAGE;
         directoryCursors.push(cursor);
         const page = script.directory[cursor];
         if (page instanceof Error) {
@@ -41,7 +42,7 @@ function fakePaseo(script: {
       ref: (agentId: string) => ({
         timeline: {
           async refetch(options: { cursor?: string }) {
-            const cursor = options.cursor ?? "";
+            const cursor = options.cursor ?? FIRST_PAGE;
             refetches.push({ agentId, cursor });
             const page = script.timelines[agentId]?.[cursor];
             if (!page) {
@@ -68,7 +69,7 @@ function prompt(text: string, seqStart: number): PromptEntry {
 
 function singleAgent(id: string, updatedAt: string, pages: Record<string, TimelinePage>) {
   return fakePaseo({
-    directory: { "": { agents: [{ id, updatedAt }] } },
+    directory: { [FIRST_PAGE]: { agents: [{ id, updatedAt }] } },
     timelines: { [id]: pages },
   });
 }
@@ -87,19 +88,19 @@ function silenceWarnings(t: TestContext) {
 
 test("an agent's prompts are read page by page from newest to oldest", async () => {
   const { paseo, refetches } = singleAgent("paged", "u1", {
-    "": { entries: [prompt("newer", 2)], startCursor: "older" },
+    [FIRST_PAGE]: { entries: [prompt("newer", 2)], startCursor: "older" },
     older: { entries: [prompt("older", 1)] },
   });
 
   assert.deepEqual(texts(await load(paseo)), ["newer", "older"]);
   assert.deepEqual(refetches, [
-    { agentId: "paged", cursor: "" },
+    { agentId: "paged", cursor: FIRST_PAGE },
     { agentId: "paged", cursor: "older" },
   ]);
 });
 
 test("cached prompts are reused until the agent's updatedAt changes", async () => {
-  const pages = { "": { entries: [prompt("cached", 1)] } };
+  const pages = { [FIRST_PAGE]: { entries: [prompt("cached", 1)] } };
   const first = singleAgent("cache", "u1", pages);
   const same = singleAgent("cache", "u1", pages);
   const changed = singleAgent("cache", "u2", pages);
@@ -117,7 +118,7 @@ test("cached prompts are reused until the agent's updatedAt changes", async () =
 test("a failure on a later page keeps the newer pages and is read again next time", async (t) => {
   silenceWarnings(t);
   const pages = {
-    "": { entries: [prompt("newer", 2)], startCursor: "older" },
+    [FIRST_PAGE]: { entries: [prompt("newer", 2)], startCursor: "older" },
     older: { entries: [], error: "timeline unavailable" },
   };
   const first = singleAgent("partial", "u1", pages);
@@ -131,18 +132,18 @@ test("a failure on a later page keeps the newer pages and is read again next tim
 
 test("a failure on the first page skips that agent, is not cached, and leaves the others loaded", async (t) => {
   silenceWarnings(t);
-  const failing = { "": { entries: [], error: "timeline unavailable" } };
+  const failing = { [FIRST_PAGE]: { entries: [], error: "timeline unavailable" } };
   const build = () =>
     fakePaseo({
       directory: {
-        "": {
+        [FIRST_PAGE]: {
           agents: [
             { id: "broken", updatedAt: "u1" },
             { id: "fine", updatedAt: "u1" },
           ],
         },
       },
-      timelines: { broken: failing, fine: { "": { entries: [prompt("fine prompt", 1)] } } },
+      timelines: { broken: failing, fine: { [FIRST_PAGE]: { entries: [prompt("fine prompt", 1)] } } },
     });
   const first = build();
   const second = build();
@@ -162,12 +163,12 @@ test("a directory failure rejects the load", async () => {
 test("directory pagination follows cursors and stops on a repeated one", async () => {
   const { paseo, directoryCursors } = fakePaseo({
     directory: {
-      "": { agents: [{ id: "dir-a", updatedAt: "u1" }], nextCursor: "next" },
+      [FIRST_PAGE]: { agents: [{ id: "dir-a", updatedAt: "u1" }], nextCursor: "next" },
       next: { agents: [{ id: "dir-b", updatedAt: "u1" }], nextCursor: "next" },
     },
     timelines: {
-      "dir-a": { "": { entries: [prompt("from a", 1)] } },
-      "dir-b": { "": { entries: [prompt("from b", 1)] } },
+      "dir-a": { [FIRST_PAGE]: { entries: [prompt("from a", 1)] } },
+      "dir-b": { [FIRST_PAGE]: { entries: [prompt("from b", 1)] } },
     },
   });
 
@@ -187,8 +188,8 @@ test("aborting before the load starts reads nothing", async () => {
 test("aborting during the load stops delivering batches and reading agents", async () => {
   const ids = Array.from({ length: 8 }, (_, index) => `abort-${index}`);
   const { paseo, refetches } = fakePaseo({
-    directory: { "": { agents: ids.map((id) => ({ id, updatedAt: "u1" })) } },
-    timelines: Object.fromEntries(ids.map((id) => [id, { "": { entries: [prompt(id, 1)] } }])),
+    directory: { [FIRST_PAGE]: { agents: ids.map((id) => ({ id, updatedAt: "u1" })) } },
+    timelines: Object.fromEntries(ids.map((id) => [id, { [FIRST_PAGE]: { entries: [prompt(id, 1)] } }])),
   });
   const controller = new AbortController();
   const batches: PromptRecord[][] = [];
