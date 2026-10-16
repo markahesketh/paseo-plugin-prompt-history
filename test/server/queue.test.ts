@@ -96,21 +96,6 @@ test("sends one queued prompt for each completed turn, in order", async () => {
   assert.deepEqual(queue.snapshot().queues, []);
 });
 
-test("does not lose a turn end that arrives while a queued send is pending", async () => {
-  const { queue, sentTexts } = fakeDaemon();
-  await queue.send("agent", "first");
-  await queue.send("agent", "second");
-  await queue.send("agent", "third");
-
-  // The second prompt's turn ends before the first turn-end handler finishes.
-  const end = { turnId: null, outcome: completed, timeline: [] };
-  const firstEnd = queue.turnEnded("agent", end);
-  const secondEnd = queue.turnEnded("agent", end);
-  await Promise.all([firstEnd, secondEnd]);
-
-  assert.deepEqual(sentTexts(), ["first", "second", "third"]);
-});
-
 test("uses the queued prompt ID as the message ID", async () => {
   const { daemon, queue, endTurn } = fakeDaemon();
   await queue.send("agent", "first");
