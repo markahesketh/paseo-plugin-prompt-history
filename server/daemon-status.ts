@@ -1,7 +1,7 @@
-import type { PaseoAgent } from "@getpaseo/client";
+import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import type { DaemonStatus } from "./queue";
 
-export type AgentView = Pick<PaseoAgent, "status" | "activeTurn" | "archivedAt">;
+export type AgentView = Pick<AgentSnapshotPayload, "status" | "activeTurn" | "archivedAt">;
 
 export function daemonStatus(result: { agent: AgentView } | null): DaemonStatus {
   if (!result || result.agent.archivedAt) {
