@@ -76,7 +76,7 @@ paseo plugin install "$PWD"
 
 ## Requirements
 
-- Paseo `>=0.9.1 <0.13.0`, on both the daemon and each app that connects to it.
+- Paseo `>=0.9.1 <0.14.0`, on both the daemon and each app that connects to it.
 - The Paseo web or desktop client for the `Ctrl+R` shortcut.
 
 The plugin also runs in the iOS and Android apps. There, it has no `Ctrl+R` shortcut and a tap opens the editor. Paseo controls which timeline entries are available to the plugin.

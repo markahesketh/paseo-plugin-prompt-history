@@ -16,8 +16,8 @@
     "test": "node --experimental-strip-types --test test/client/*.test.ts test/server/*.test.ts"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "0.12.0",
-    "@getpaseo/protocol": "0.12.0",
+    "@getpaseo/plugin": "0.13.2",
+    "@getpaseo/protocol": "0.13.2",
     "@types/node": "^22.20.5",
     "@types/react": "~19.2.0",
     "react": "19.1.0",
